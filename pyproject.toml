@@ -1,0 +1,20 @@
+[project]
+name = "vibecheck"
+version = "0.1.0"
+description = "AI로 짠 코드, 설명할 수 있게"
+requires-python = ">=3.11"
+dependencies = [
+    "tree-sitter",
+    "tree-sitter-python",
+    "anthropic",
+    "python-dotenv",
+    "typer",
+    "rich",
+]
+
+[project.scripts]
+whyd = "vibecheck.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
