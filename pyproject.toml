@@ -10,6 +10,8 @@ dependencies = [
     "python-dotenv",
     "typer",
     "rich",
+    "chromadb",
+    "sentence-transformers",
 ]
 
 [project.scripts]
