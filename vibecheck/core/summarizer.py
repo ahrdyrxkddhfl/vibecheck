@@ -103,8 +103,8 @@ if __name__ == "__main__":
     from vibecheck.core.parser import parse_file, walk
     from vibecheck.llm.anthropic import AnthropicClient
 
-    tree, source = parse_file("sample.py")
-    chunks = to_chunks(walk(tree.root_node, source), source, "sample.py")
+    tree, source = parse_file("tests/fixtures/sample.py")
+    chunks = to_chunks(walk(tree.root_node, source), source, "tests/fixtures/sample.py")
 
     llm = AnthropicClient()
     for c in summarize_all(chunks, llm):

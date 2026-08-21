@@ -26,7 +26,7 @@ EXCLUDE_DIRS = {
     ".ruff_cache",
     "build",
     "dist",
-    ".vivecheck",
+    ".vibecheck",
 }
 
 """순회에서 제외할 디렉토리 이름

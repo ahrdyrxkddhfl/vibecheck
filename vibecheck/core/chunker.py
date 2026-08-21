@@ -69,9 +69,9 @@ def to_chunks(
 if __name__ == "__main__":
     from vibecheck.core.parser import parse_file, walk
 
-    tree, source = parse_file("sample.py")
+    tree, source = parse_file("tests/fixtures/sample.py")
     symbols = walk(tree.root_node, source)
-    chunks = to_chunks(symbols, source, "sample.py")
+    chunks = to_chunks(symbols, source, "tests/fixtures/sample.py")
 
     for c in chunks:
         print(f"\n{'=' * 40}")

@@ -134,7 +134,7 @@ def extract_imports(root_node, source: bytes) -> list[str]:
 # 실행부(계속 수정 중...)
 # ===================
 if __name__ == "__main__":
-    tree, source = parse_file("sample.py")
+    tree, source = parse_file("tests/fixtures/sample.py")
     for s in walk(tree.root_node, source):
         owner = f"{s.parent}." if s.parent else ""
         print(f"{s.kind:9} {owner}{s.name:12} ({s.start_line}-{s.end_line})")
