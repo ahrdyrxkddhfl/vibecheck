@@ -56,6 +56,10 @@ class Chunk:
         summary (str | None): LLM이 생성한 한 줄 요약.
             파싱 시점에는 None이며 요약 단계에서 채워진다.
             None 여부로 재인덱싱 대상을 선별할 수 있다.
+        imports (list[str]): 이 심볼이 속한 파일의 import 문 목록.
+            청크는 함수 본문만 담아 파일 상단의 import가 잘리므로,
+            요약 시 어떤 라이브러리를 쓰는지 모델이 알 수 없다.
+            추측을 막기 위해 파일 단위 정보를 청크에 함께 싣는다.
     """
 
     file: str
@@ -67,6 +71,7 @@ class Chunk:
     parent: str | None = None
     calls: list[str] = field(default_factory=list)
     summary: str | None = None
+    imports: list[str] = field(default_factory=list)
 
     @property
     def id(self) -> str:

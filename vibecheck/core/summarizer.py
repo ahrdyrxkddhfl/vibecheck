@@ -31,22 +31,34 @@ def build_user_message(chunk: Chunk) -> str:
     """요약 요청에 사용할 사용자 메시지를 구성한다.
 
     코드 본문을 구분자로 감싸 전달한다.
-    이는 코드 내부의 텍스트가 프롬프트의 일부로 해석되는 것을 막기 위한 것으로, 
+    이는 코드 내부의 텍스트가 프롬프트의 일부로 해석되는 것을 막기 위한 것으로,
     경계를 명시해 모델이 해당 영역을 지시가 아닌 데이터로 취급하도록 유도한다.
 
-    Args: 
-        chunk (Chunk) : 요약 대상 청크.
-    
+    import 문을 함께 전달하는 이유는 청크가 함수 본문만 담기 때문이다.
+    파일 상단의 import가 잘려나가면 모델이 어떤 라이브러리를 쓰는지 알 수 없어
+    추측으로 채운다. 실제로 tree-sitter 기반 파서가 "파이썬 파서"로 요약되어
+    해당 청크가 검색에서 누락되는 사례가 확인되었다.
+
+    Args:
+        chunk (Chunk): 요약 대상 청크.
+
     Returns:
-        str : 파일 경로, 심볼명, 종류와 코드 본문을 포함한 메시지.
+        str: 파일 경로, 심볼명, 종류, import 목록과 코드 본문을 포함한 메시지.
     """
-    return (
-        f"파일: {chunk.file}\n"
-        f"파일: {chunk.symbol}\n"
-        f"종류: {chunk.kind}\n"
-        f"\n"
-        f"<code>\n{chunk.code}\n</code>"
-    )
+    parts = [
+        f"파일: {chunk.file}",
+        f"심볼: {chunk.symbol}",
+        f"종류: {chunk.kind}",
+    ]
+
+    # import가 없는 청크도 있으므로 있을 때만 넣는다.
+    if chunk.imports:
+        parts.append("\n이 파일의 import:")
+        parts.extend(chunk.imports)
+
+    parts.append(f"\n<code>\n{chunk.code}\n</code>")
+
+    return "\n".join(parts)
 def summarize(chunk:Chunk, llm: LLMClient) -> Chunk:
     """청크에 요약을 채워 반환한다.
 

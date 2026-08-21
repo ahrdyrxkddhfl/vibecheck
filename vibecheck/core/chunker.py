@@ -10,7 +10,12 @@
 
 from vibecheck.models import Chunk, Symbol
 
-def to_chunks(symbols: list[Symbol], source: bytes, file_path:str) -> list[Chunk]:
+def to_chunks(
+        symbols: list[Symbol],
+        source: bytes,
+        file_path:str,
+        imports: list[str] | None = None,
+        ) -> list[Chunk]:
     """Symbol 목록을 Chunk 목록으로 변환한다.
 
     각 심볼의 라인 범위로 소스를 잘라 코드 본문을 채운다.
@@ -21,9 +26,11 @@ def to_chunks(symbols: list[Symbol], source: bytes, file_path:str) -> list[Chunk
     서로 다른 범위의 맥락을 필요로 하기 때문이다.
 
     Args:
-        symbols (list[Symbol]):
+        symbols (list[Symbol]): 파서가 추출한 심볼 목록.
         source (bytes): 원본 소스 바이트.
         file_path (str): 레포 루트 기준 상대 경로. Chunk의 식별자와 검색 텍스트에 포함됨
+        imports (list[str] | None): 파일의 import 문 목록.
+            요약 단계에서 라이브러리를 추측하지 않도록 전달한다.
     Returns:
         list[Chunk]: 코드 본문이 채워진 청크 목록. 입력 순서를 유지한다
     """
@@ -49,6 +56,7 @@ def to_chunks(symbols: list[Symbol], source: bytes, file_path:str) -> list[Chunk
                 end_line=s.end_line,
                 code=body,
                 parent=s.parent,
+                imports=imports or [],
             )
         )
     return chunks

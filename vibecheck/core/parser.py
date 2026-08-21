@@ -106,6 +106,30 @@ def walk(
 
     return results
 
+def extract_imports(root_node, source: bytes) -> list[str]:
+    """파일 최상단의 import문을 원문 그대로 수집한다.
+
+    청크는 함수, 클래스 본문만 담기 때문에 파일 상단의 import가 잘려나간다.
+    그 결과 요약 단계에서 모델이 어떤 라이브러리를 쓰는지 알 수 없어 추측으로 채우는 문제가 발생한다.
+    실제로 tree-sitter를 쓰는 파서가 "파이썬 파서"로 요약되어 검색에서 누락되는 사례가 확인되었다.
+
+    최상위 노드만 훑는 이유는 import가 관례적으로 파일 상단에 오기 때문이다.
+    함수 내부의 지역 import까지 재귀 탐색하면 비용 대비 이득이 적다.
+
+    Args:
+        root_node: tree-sitter가 파싱한 루트 노드.
+        source (bytes): 원본 소스 바이트.
+
+    Returns:
+        list[str]: import문 원문 목록. 없으면 빈 리스트.
+    """
+    imports = []
+
+    for child in root_node.children:
+        if child.type in ("import_statement", "import_from_statement"):
+            imports.append(source[child.start_byte : child.end_byte].decode())
+
+    return imports
 # ===================
 # 실행부(계속 수정 중...)
 # ===================
