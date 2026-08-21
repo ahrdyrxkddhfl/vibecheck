@@ -105,6 +105,77 @@ def count_comments(source: str) -> tuple[int, int]:
 
     return len(comments_rows), code_lines
 
+def build_module_names(files: list, root: str) -> set[str]:
+    """수집된 파일들의 모듈 이름 집합을 만든다.
+
+    import 대상이 레포 내부인지 외부 라이브러리인지 가르려면 "내부에 무엇이 있는지" 목록이 먼저 필요하다.
+
+    Args:
+        files (list): collect_files가 수집한 경로 목록.
+        root (str): 레포 루트 경로.
+
+    Returns:
+        set[str]: 점으로 구분된 모듈 이름 집합.
+    """
+    names = set()
+
+    for path in files:
+        rel = to_relative(path, root)
+        module = rel[:-3].replace("/", ".") # .py 제거 후 경로를 모듈 표기로
+
+        # __init__.py는 파일이 아니라 패키지 자체를 가리킨다.
+        # vibecheck/core/__init__.py는 vibecheck.core로 import된다.
+        if module.endswith(".__init__"):
+            module = module[: -len(".__init__")]
+
+        names.add(module)
+
+    return names
+
+def count_internal_imports(tree: ast.AST, module_names: set[str]) -> int:
+    """레포 내부 모듈을 가리키는 import 개수를 센다.
+
+    외부 라이브러리 import는 제외한다.
+    알고 싶은 것은 '이 레포의 파일들이 서로 얽혀 있는가'이고,
+    그래야 관계형 질문('A는 어디서 만들어져?')을 만들 수 있기 때문이다.
+
+    모듈 이름을 뒤에서부터 잘라가며 대조하는 이유는 실행 위치에 따라
+    수집된 경로의 기준점이 달라지기 때문이다.
+    레포 루트에서 실행하면 vibecheck.models로, 패키지 안에서 실행하면 models로 잡힌다.
+
+    부분 일치를 허용하므로 외부 모듈이 내부와 같은 이름을 가지면 잘못 셀 수 있다.
+    후보를 거르는 용도이므로 이 정도 오차는 감수한다.
+
+    Args:
+        tree (ast.AST): 파싱된 구문 트리.
+        module_names (set[str]): 내부 모듈 이름 집합.
+
+    Returns:
+        int: 내부를 가리키는 import 개수.
+    """
+    def is_internal(dotted: str) -> bool:
+        parts = dotted.split(".")
+        # vibecheck.models -> models 순으로 좁혀가며 대조한다.
+        for i in range(len(parts)):
+            if ".".join(parts[i:]) in module_names:
+                return True
+        return False
+
+    count = 0
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            count += sum(1 for a in node.names if is_internal(a.name))
+
+        elif isinstance(node, ast.ImportFrom):
+            # level > 0 은 상대 경로 import(from . import x)로 항상 내부다.
+            if node.level > 0:
+                count += 1
+            elif node.module and is_internal(node.module):
+                count += 1
+
+    return count
+
 def screen(root: str) -> None:
     """레포를 스크리닝하고 결과를 출력한다.
 
@@ -117,15 +188,18 @@ def screen(root: str) -> None:
     """
     files = collect_files(root)
 
+
     if not files:
         print(f"수집된 .py 파일이 없습니다: {root}")
         return
-
+    module_names = build_module_names(files, root)
+    
     total_lines = 0
     total_targets = 0
     total_documented = 0
     total_comments = 0
     total_code_lines = 0
+    total_internal_imports = 0
     failures: list[tuple[str, str]] = []
 
     for path in files:
@@ -157,6 +231,7 @@ def screen(root: str) -> None:
         c, cl = count_comments(source)
         total_comments += c
         total_code_lines += cl
+        total_internal_imports += count_internal_imports(tree, module_names)
 
     parsed = len(files) - len(failures)
     rate = parsed / len(files) * 100
@@ -167,6 +242,7 @@ def screen(root: str) -> None:
     print(f"파일 수      : {len(files)}개")
     print(f"총 라인 수   : {total_lines:,}줄")
     print(f"파싱 성공    : {parsed}/{len(files)} ({rate:.1f}%)")
+    print(f"내부 import : {total_internal_imports}건")
 
     doc_rate = total_documented / total_targets * 100 if total_targets else 0
     density = total_comments / total_code_lines * 100 if total_code_lines else 0
