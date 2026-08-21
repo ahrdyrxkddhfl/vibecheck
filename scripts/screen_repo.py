@@ -19,6 +19,7 @@ import tokenize
 import ast
 import sys
 
+from pathlib import Path
 from vibecheck.core.collector import collect_files, to_relative
 
 TOOL_DIRECTIVE = re.compile(r"^#\s*(noqa|type:|pylint:|mypy:|ruff:|fmt:|isort:)")
@@ -26,6 +27,30 @@ TOOL_DIRECTIVE = re.compile(r"^#\s*(noqa|type:|pylint:|mypy:|ruff:|fmt:|isort:)"
 
 린터, 타입체커에 주는 명령이므로 코드 이해를 돕는 주석으로 세면 안 된다.
 """
+
+INPUT_PER_MTOK = 1.00
+OUTPUT_PER_MTOK = 5.00
+"""요약 모델(Claude Haiku)의 100만 토큰당 단가(USD).
+
+단가는 바뀔 수 있으므로 상수로 분리한다.
+"""
+
+PROMPT_TOKENS = 300
+"""요약 프롬프트의 대략적 토큰 수.
+
+청크마다 프롬프트 전체가 다시 전송되므로, 짧은 함수가 많은 레포에서는
+이 고정 비용이 전체 입력의 절반을 넘기도 한다.
+"""
+
+CHARS_PER_TOKEN = 4
+"""영문 코드 기준 토큰 하나에 해당하는 글자 수.
+
+정확히 세려면 tokenizer가 필요하지만 후보를 거르는 용도에는 과하다.
+한글이 섞이면 실제 토큰이 더 많아 과소 추정이 된다.
+"""
+
+SUMMARY_TOKENS = 50
+"""요약 한 건의 출력 토큰 수. 프롬프트가 60자 이내를 요구해 상한이 좁다."""
 
 def count_docstrings(tree: ast.AST) -> tuple[int, int]:
     """독스트링이 붙을 수 있는 대상과 실제로 붙은 개수를 센다.
@@ -104,6 +129,51 @@ def count_comments(source: str) -> tuple[int, int]:
         code_lines += 1
 
     return len(comments_rows), code_lines
+
+def find_readme(root: str) -> tuple[str, int]:
+    """레포 루트의 README를 찾아 이름과 글자 수를 돌려준다.
+
+    README는 코드 밖에 있는 정답지 후보다. 실험 A는 남의 코드를 다루므로
+    답변이 맞는지 판단할 근거가 코드 밖에 있어야 채점이 가능하다.
+
+    길이가 내용을 보장하지는 않는다. 설치법만 긴 README는 설계 의도에 답하지 못한다.
+    다만 README가 없으면 정답지가 없는 것은 확실하다.
+
+    Args:
+        root (str): 레포 루트 경로.
+
+    Returns:
+        tuple[str, int]: (파일명, 글자 수). 없으면 ("", 0).
+    """
+    for path in sorted(Path(root).glob("README*")):
+        if path.is_file():
+            try:
+                return path.name, len(path.read_text(encoding="utf-8"))
+            except UnicodeDecodeError:
+                continue
+
+    return "", 0
+
+def is_test_file(rel: str) -> bool:
+    """상대 경로가 테스트 파일인지 판별한다.
+
+    테스트는 제외 대상이 아니라 가점 요소다. 함수 이름 자체가 의도를 서술하므로
+    ("test_parser_handles_nested_class") 독스트링이 없는 레포에서도
+    정답지 역할을 할 수 있다.
+
+    Args:
+        rel (str): 레포 루트 기준 상대 경로.
+
+    Returns:
+        bool: 테스트 파일이면 True.
+    """
+    name = rel.rsplit("/", 1)[-1]
+    return(
+        "tests/" in rel
+        or rel.startswith("test/")
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+    )
 
 def build_module_names(files: list, root: str) -> set[str]:
     """수집된 파일들의 모듈 이름 집합을 만든다.
@@ -193,13 +263,15 @@ def screen(root: str) -> None:
         print(f"수집된 .py 파일이 없습니다: {root}")
         return
     module_names = build_module_names(files, root)
-    
+
     total_lines = 0
     total_targets = 0
     total_documented = 0
     total_comments = 0
     total_code_lines = 0
     total_internal_imports = 0
+    total_test_files = 0
+    total_chars = 0
     failures: list[tuple[str, str]] = []
 
     for path in files:
@@ -214,6 +286,9 @@ def screen(root: str) -> None:
             continue
 
         total_lines += source.count("\n") + 1
+        total_chars += len(source)
+        if is_test_file(rel):
+            total_test_files += 1
 
         # tree-sitter가 아니라 ast를 쓰는 이유:
         # tree-sitter는 문법 오류가 있어도 ERROR 노드를 남기고 계속 파싱하므로 실패를 감지할 수 없다.
@@ -249,6 +324,23 @@ def screen(root: str) -> None:
 
     print(f"독스트링    : {total_documented}/{total_targets} ({doc_rate:.1f}%)")
     print(f"주석 밀도   : 100줄당 {density:.1f}줄")
+
+    # 청크는 함수, 클래스 단위로 만들어지므로 독스트링 대상 개수와 거의 같다.
+    chunks = total_targets
+    input_tokens = chunks * PROMPT_TOKENS + total_chars / CHARS_PER_TOKEN
+    output_tokens = chunks * SUMMARY_TOKENS
+    cost = (
+        input_tokens / 1_000_000 * INPUT_PER_MTOK
+        + output_tokens / 1_000_000 * OUTPUT_PER_MTOK
+    )
+
+    readme_name, readme_chars = find_readme(root)
+    readme_label = f"{readme_name} ({readme_chars:,}자)" if readme_name else "없음"
+
+    print(f"테스트 파일: {total_test_files}개")
+    print(f"README  : {readme_label}")
+    print(f"예상 청크   : 약 {chunks}개")
+    print(f"예상 비용   : 약 ${cost:.3f}")
 
     if failures:
         print(f"\n실패 {len(failures)}건:")
