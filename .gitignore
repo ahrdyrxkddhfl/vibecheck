@@ -1,11 +1,25 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
-.env
-.vibecheck/
-*.db
-.DS_Store
-
+*.py[cod]
 *.egg-info/
 build/
 dist/
+
+# 환경
+.venv/
+venv/
+.env
+
+# 에디터·OS
+.vscode/
+.DS_Store
+
+# 인덱스 산출물 (재생성 가능)
+chroma/
+*.sqlite3
+manifest.json
+
+# 실험 산출물
+experiments/
+data/repos/
+.vibecheck/
