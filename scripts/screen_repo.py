@@ -20,7 +20,12 @@ import ast
 import sys
 
 from pathlib import Path
-from vibecheck.core.collector import collect_files, to_relative
+from vibecheck.core.collector import (
+    build_module_names,
+    collect_files,
+    is_internal_import,
+    to_relative,
+)
 
 TOOL_DIRECTIVE = re.compile(r"^#\s*(noqa|type:|pylint:|mypy:|ruff:|fmt:|isort:)")
 """사람에게 하는 설명이 아닌 도구 지시문 패턴.
@@ -176,77 +181,6 @@ def is_test_file(rel: str) -> bool:
         or name.endswith("_test.py")
     )
 
-def find_package_anchor(path: Path) -> Path:
-    """모듈 이름의 기준점이 되는 디렉터리를 찾는다.
-
-    __init__.py가 이어지는 가장 바깥 패키지를 찾아, 그 부모를 기준점으로 삼는다.
-    src/ctxd/client.py는 파일 경로상 세 칸 깊이지만 import는 ctxd.client로 하는데,
-    src가 패키지가 아니라 소스를 담아두는 폴더일 뿐이기 때문이다.
-    경로를 그대로 모듈 이름으로 바꾸면 src.ctxd.client가 되어 어떤 import와도 대조되지 않는다.
-
-    __init__.py의 유무로 판별하는 이유는 그것이 파이썬이 패키지를 인식하는 기준 그 자체이기 때문이다.
-    디렉터리 이름 목록(src, lib 등)을 하드코딩하면 관례를 벗어난 레포에서 바로 틀린다.
-
-    Args:
-        path (Path): 소스 파일 경로.
-
-    Returns:
-        Path: 모듈 이름을 상대 계산할 기준 디렉터리.
-    """
-    anchor = path.parent
-
-    # 패키지가 아닌 디렉터리를 만나면 거기가 경계다.
-    while (anchor / "__init__.py").exists():
-        anchor = anchor.parent
-
-    return anchor
-
-
-def build_module_names(files: list, root: str) -> set[str]:
-    """수집된 파일들의 모듈 이름 집합을 만든다.
-
-    import 대상이 레포 내부인지 외부 라이브러리인지 가르려면
-    "내부에 무엇이 있는지" 목록이 먼저 필요하다.
-
-    경로를 그대로 점 표기로 바꾸지 않고 패키지 기준점을 찾아 상대 계산한다.
-    src 레이아웃에서 실제 import 문과 이름이 어긋나기 때문이다.
-
-    기준점이 서로 다른 파일이 섞여도 문제되지 않는다.
-    집합에 담아두면 count_internal_imports가 뒤에서부터 좁혀가며 대조하므로,
-    어느 한쪽만 맞아도 내부로 판정된다.
-
-    Args:
-        files (list): collect_files가 수집한 경로 목록.
-        root (str): 레포 루트 경로. 기준점이 루트를 벗어날 때의 안전망으로 쓴다.
-
-    Returns:
-        set[str]: 점으로 구분된 모듈 이름 집합.
-    """
-    names = set()
-    root_path = Path(root).resolve()
-
-    for path in files:
-        path = Path(path).resolve()
-        anchor = find_package_anchor(path)
-
-        # 기준점이 레포 밖으로 나가면(루트 자체가 패키지인 경우) 루트로 되돌린다.
-        try:
-            rel = path.relative_to(anchor)
-        except ValueError:
-            rel = path.relative_to(root_path)
-
-        module = str(rel.with_suffix("")).replace("/", ".")
-
-        # __init__.py는 파일이 아니라 패키지 자체를 가리킨다.
-        # ctxd/__init__.py는 ctxd로 import된다.
-        if module.endswith(".__init__"):
-            module = module[: -len(".__init__")]
-        elif module == "__init__":
-            continue
-
-        names.add(module)
-
-    return names
 
 def count_internal_imports(tree: ast.AST, module_names: set[str]) -> int:
     """레포 내부 모듈을 가리키는 import 개수를 센다.
@@ -269,25 +203,17 @@ def count_internal_imports(tree: ast.AST, module_names: set[str]) -> int:
     Returns:
         int: 내부를 가리키는 import 개수.
     """
-    def is_internal(dotted: str) -> bool:
-        parts = dotted.split(".")
-        # vibecheck.models -> models 순으로 좁혀가며 대조한다.
-        for i in range(len(parts)):
-            if ".".join(parts[i:]) in module_names:
-                return True
-        return False
-
     count = 0
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            count += sum(1 for a in node.names if is_internal(a.name))
+            count += sum(1 for a in node.names if is_internal_import(a.name, module_names))
 
         elif isinstance(node, ast.ImportFrom):
             # level > 0 은 상대 경로 import(from . import x)로 항상 내부다.
             if node.level > 0:
                 count += 1
-            elif node.module and is_internal(node.module):
+            elif node.module and is_internal_import(node.module, module_names):
                 count += 1
 
     return count

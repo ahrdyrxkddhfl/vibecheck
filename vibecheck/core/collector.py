@@ -115,6 +115,98 @@ def to_relative(path: Path, root: str) -> str:
     """
     return path.relative_to(Path(root)).as_posix()
 
+def find_package_anchor(path: Path) -> Path:
+    """모듈 이름의 기준점이 되는 디렉토리를 찾는다.
+
+    __init__.py가 이어지는 가장 바깥 패키지를 찾아 그 부모를 기준점으로 삼는다.
+    src/ctxd/client.py는 경로상 세 칸 깊이지만 import는 ctxd.client로 하는데,
+    src가 패키지가 아니라 소스를 담아두는 폴더일 뿐이기 때문이다.
+    경로를 그대로 모듈 이름으로 바꾸면 src.ctxd.client가 되어 어떤 import와도 대조되지 않는다.
+
+    __init__.py의 유무로 판별하는 이유는 그것이 파이썬이 패키지를 인식하는 기준 그 자체이기 때문이다.
+    디렉토리 이름 목록(src, lib 등)을 하드코딩하면 관례를 벗어난 레포에서 바로 틀린다.
+
+    Args:
+        path (Path): 소스 파일 경로.
+
+    Returns:
+        Path: 모듈 이름을 상대 계산할 기준 디렉토리.
+    """
+    anchor = path.parent
+
+    # 패키지가 아닌 디렉토리를 만나면 거기가 경계다.
+    while (anchor / "__init__.py").exists():
+        anchor = anchor.parent
+
+    return anchor
+
+
+def build_module_names(files: list[Path], root: str) -> set[str]:
+    """수집된 파일들의 모듈 이름 집합을 만든다.
+
+    import 대상이 레포 내부인지 외부 라이브러리인지 가르려면
+    "내부에 무엇이 있는지" 목록이 먼저 필요하다.
+
+    Args:
+        files (list[Path]): collect_files가 수집한 경로 목록.
+        root (str): 레포 루트 경로. 기준점이 루트를 벗어날 때의 안전망으로 쓴다.
+
+    Returns:
+        set[str]: 점으로 구분된 모듈 이름 집합.
+    """
+    names = set()
+    root_path = Path(root).resolve()
+
+    for path in files:
+        path = Path(path).resolve()
+        anchor = find_package_anchor(path)
+
+        # 기준점이 레포 밖으로 나가면(루트 자체가 패키지인 경우) 루트로 되돌린다.
+        try:
+            rel = path.relative_to(anchor)
+        except ValueError:
+            rel = path.relative_to(root_path)
+
+        module = str(rel.with_suffix("")).replace("/", ".")
+
+        # __init__.py는 파일이 아니라 패키지 자체를 가리킨다.
+        if module.endswith(".__init__"):
+            module = module[: -len(".__init__")]
+        elif module == "__init__":
+            continue
+
+        names.add(module)
+
+    return names
+
+
+def is_internal_import(dotted: str, module_names: set[str]) -> bool:
+    """import 대상이 레포 내부 모듈인지 판별한다.
+
+    모듈 이름을 앞에서부터 잘라가며 대조하는 이유는 수집 경로의 기준점이
+    실행 위치에 따라 달라지기 때문이다.
+    ctxd.client로 잡힐 수도 client로 잡힐 수도 있다.
+
+    부분 일치를 허용하므로 외부 모듈이 내부와 같은 이름이면 잘못 판정할 수 있다.
+    의존성 목록을 만드는 용도이므로 이 정도 오차는 감수한다.
+
+    Args:
+        dotted (str): 점으로 구분된 import 대상 이름.
+        module_names (set[str]): 내부 모듈 이름 집합.
+
+    Returns:
+        bool: 내부 모듈이면 True.
+    """
+    # 상대 경로 import(from . import x)는 항상 내부다.
+    if dotted.startswith("."):
+        return True
+
+    parts = dotted.split(".")
+    for i in range(len(parts)):
+        if ".".join(parts[i:]) in module_names:
+            return True
+    return False
+
 if __name__ == "__main__":
     import sys
 
