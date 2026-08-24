@@ -15,6 +15,7 @@ from pathlib import Path
 
 import typer
 
+from vibecheck.services.interview import build_questions, format_questions
 from vibecheck.core.collector import collect_files
 from vibecheck.core.quirks import find_quirks, group_quirks
 from vibecheck.core.overview import build_overview
@@ -246,6 +247,46 @@ def report(
 
     typer.secho(f"\n리포트 생성 완료: {target}", fg=typer.colors.GREEN)
 
+@app.command()
+def interview(
+    repo: Path = typer.Argument(..., help="예상질문을 만들 레포 경로"),
+    output: Path = typer.Option(
+        None, "--output", "-o", help="저장할 파일 경로 (기본: 화면 출력)"
+    ),
+    exclude: list[str] = typer.Option(
+        None, "--exclude", "-e", help="제외할 디렉토리 이름"
+    ),
+) -> None:
+    """인덱싱된 레포로 면접 예상질문을 만든다.
+
+    Args:
+        repo (Path): 대상 레포 루트.
+        output (Path): 저장할 파일 경로. 없으면 화면에 출력한다.
+        exclude (list[str]): 인덱싱 때와 같은 제외 목록.
+    """
+    repo = repo.expanduser().resolve()
+    _, chroma_dir = index_paths(repo)
+
+    if not Path(chroma_dir).exists():
+        typer.secho(f"인덱스가 없습니다: {repo}", fg=typer.colors.RED)
+        typer.echo(f"먼저 인덱싱하세요:  whyd index {repo}")
+        raise typer.Exit(1)
+
+    chunks = load_indexed_chunks(repo, chroma_dir)
+    excludes = set(exclude) if exclude else None
+
+    overview = build_overview(str(repo), chunks, excludes)
+    quirk_groups = group_quirks(find_quirks(str(repo), collect_files(str(repo), excludes)))
+
+    # LLM을 부르지 않는다. 질문은 전부 조립이므로 비용도 대기도 없다.
+    text = format_questions(build_questions(overview, quirk_groups), str(repo))
+
+    if output:
+        output.write_text(text, encoding="utf-8")
+        typer.secho(f"예상질문 생성 완료: {output}", fg=typer.colors.GREEN)
+    else:
+        typer.echo(text)
+        
 def main() -> None:
     """콘솔 스크립트 진입점."""
     app()
