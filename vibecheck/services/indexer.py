@@ -18,6 +18,7 @@ def index_repo(
         llm: LLMClient,
         verbose: bool = True,
         persist_dir: str = ".vibecheck",
+        exclude_dirs: set[str] | None = None,
     ) -> list[Chunk]:
     """레포를 인덱싱해 요약이 채워진 청크 목록을 반환한다.
 
@@ -32,11 +33,14 @@ def index_repo(
             수 분이 걸릴 수 있으므로 기본값을 True로 두어 사용자가 멈춘
             것으로 오해하지 않게 한다.
         persist_dir (str): 캐시 장부를 저장할 디렉토리.
-            벡터 인덱스와 짝을 이루므로 같은 위치를 지정해야 한다.
+            벡터 인덱스와 짝을 이루므로 같은 위치를 지정해야 한다. 
+        exclude_dirs (set[str] | None): 기본 제외 목록에 더할 디렉토리 이름.
+            collect_files로 그대로 전달된다. 실험에서 테스트를 채점용 정답지로 쓸 때
+            인덱스에서 빼는 용도이며, 평소에는 넘기지 않는다.
     Returns:
         list[Chunk]: 요약이 채워진 청크 목록.
     """
-    files = collect_files(root)
+    files = collect_files(root, exclude_dirs)
     if verbose:
         print(f"[1/3] 파일 {len(files)}개 수집")
 
