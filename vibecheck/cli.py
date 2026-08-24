@@ -15,6 +15,8 @@ from pathlib import Path
 
 import typer
 
+from vibecheck.core.collector import collect_files
+from vibecheck.core.quirks import find_quirks, group_quirks
 from vibecheck.core.overview import build_overview
 from vibecheck.services.report import build_report
 from vibecheck.llm.anthropic import AnthropicClient
@@ -229,8 +231,15 @@ def report(
     typer.echo("개요를 조립하는 중...")
     overview = build_overview(str(repo), chunks, set(exclude) if exclude else None)
 
+    typer.echo("특이 지점을 찾는 중...")
+    quirk_groups = group_quirks(
+        find_quirks(str(repo), collect_files(str(repo), set(exclude) if exclude else None))
+    )
+
     typer.echo("요약을 생성하는 중...")
-    text = build_report(overview, chunks, AnthropicClient(model=SUMMARY_MODEL))
+    text = build_report(
+        overview, chunks, AnthropicClient(model=SUMMARY_MODEL), quirk_groups
+    )
 
     target = output or (repo / "WHYD_REPORT.md")
     target.write_text(text, encoding="utf-8")

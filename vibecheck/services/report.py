@@ -10,6 +10,7 @@ LLM 호출은 레포 요약 한 번뿐이고 나머지는 조립이다.
 
 from datetime import datetime
 
+from vibecheck.core.quirks import QuirkGroup
 from vibecheck.core.overview import RepoOverview, summarize_repo
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import Chunk
@@ -87,6 +88,7 @@ def build_report(
     overview: RepoOverview,
     chunks: list[Chunk],
     llm: LLMClient,
+    quirk_groups: list[QuirkGroup] | None = None,
 ) -> str:
     """레포 리포트를 마크다운으로 조립한다.
 
@@ -94,6 +96,8 @@ def build_report(
         overview (RepoOverview): 조립된 개요.
         chunks (list[Chunk]): 인덱싱된 청크 목록.
         llm (LLMClient): 레포 요약 생성에 사용할 LLM 클라이언트.
+        quirk_groups (list[QuirkGroup] | None): 특이 지점 그룹 목록.
+            없으면 해당 절을 넣지 않는다.
 
     Returns:
         str: 마크다운 리포트 전문.
@@ -156,6 +160,36 @@ def build_report(
 
     lines += ["", "---", "", "## 5. 모듈 지도", ""]
     lines += format_module_map(overview, l2)
+
+    lines += ["---", "", "## 6. 물어볼 만한 지점", ""]
+
+    if quirk_groups:
+        lines.append(
+            "코드에 남아 있지만 이유는 적혀 있지 않은 지점들입니다. "
+            "면접에서 \"왜 이렇게 했나요\"가 나올 자리이므로 미리 답을 준비해두면 좋습니다."
+        )
+        lines.append("")
+
+        for i, group in enumerate(quirk_groups, start=1):
+            lines.append(f"### {i}. {group.question}")
+            lines.append("")
+            lines.append("확인된 사실:")
+            for quirk in group.quirks:
+                lines.append(
+                    f"- `{quirk.file}:{quirk.line}` — `{quirk.symbol}`"
+                )
+            lines.append("")
+            # group.key에 백틱이 들어 있어 그대로 두면 셸에서 명령 치환으로 해석된다.
+            # 복사해 붙여 쓰라고 내놓는 명령줄이므로 실행 가능한 형태여야 한다.
+            plain_key = group.key.replace("`", "")
+            lines.append(
+                f'> 직접 물어보기: `whyd ask {overview.root} '
+                f'"{group.quirks[0].symbol}은 왜 {plain_key}을 받고 안 쓰나요?"`'
+            )
+            lines.append("")
+    else:
+        lines.append("규칙으로 탐지된 지점이 없습니다.")
+        lines.append("")
 
     lines += [
         "---",
