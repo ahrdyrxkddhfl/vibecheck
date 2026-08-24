@@ -6,7 +6,7 @@
 """
 
 from vibecheck.store.manifest import Manifest
-from vibecheck.core.chunker import to_chunks
+from vibecheck.core.chunker import to_chunks, to_file_chunk
 from vibecheck.core.collector import collect_files, to_relative
 from vibecheck.core.summarizer import summarize_all
 from vibecheck.core.parser import extract_imports, parse_file, walk
@@ -38,7 +38,11 @@ def index_repo(
             collect_files로 그대로 전달된다. 실험에서 테스트를 채점용 정답지로 쓸 때
             인덱스에서 빼는 용도이며, 평소에는 넘기지 않는다.
     Returns:
-        list[Chunk]: 요약이 채워진 청크 목록.
+        Returns:
+            list[Chunk]: 요약이 채워진 청크 목록.
+                함수·클래스 단위 청크(L2)와 파일 단위 개요 청크(L1)가 섞여 있다.
+                L1은 함수 단위로는 담기지 않는 import 정보와 심볼 목록을
+                검색 대상으로 만들기 위한 것으로, LLM 호출 없이 조립된다.
     """
     files = collect_files(root, exclude_dirs)
     if verbose:
@@ -67,13 +71,25 @@ def index_repo(
 
         all_chunks.extend(chunks)
 
+        # L1은 L2 요약을 조립하므로 summarize_all 이후에 만든다.
+        # manifest에는 넣지 않는다. 캐시의 단위는 LLM 호출인데
+        # L1은 호출 없이 조립되므로 캐싱할 대상이 아니다.
+        file_chunk = to_file_chunk(
+            chunks,
+            to_relative(path, root),
+            len(source.decode().splitlines()),
+            imports,
+        )
+        if file_chunk:
+            all_chunks.append(file_chunk)
+
     manifest.save()
 
     if verbose:
         total = len(all_chunks)
-        print(f"[2/3] 청크 {total}개 생성")
-        print(f"[3/3] 요약 완료 (캐시 재사용 {cache_hits}개 / 신규 {total - cache_hits}개)")
-
+        l1 = sum(1 for c in all_chunks if c.kind == "file")
+        print(f"[2/3] 청크 {total}개 생성 (L2 {total - l1}개 + L1 {l1}개)")
+        print(f"[3/3] 요약 완료 (캐시 재사용 {cache_hits}개 / 신규 {total - l1 - cache_hits}개)")
     return all_chunks
 
 if __name__ == "__main__":

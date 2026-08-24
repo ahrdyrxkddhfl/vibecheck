@@ -43,7 +43,7 @@ def answer(
     chunks: list[Chunk],
     store: VectorStore,
     llm: LLMClient,
-    top_k: int = 5,
+    top_k: int = 8,
 ) -> tuple[str, list[Chunk]]:
     """질문에 대한 답변과 근거 청크를 반환한다.
 
@@ -58,6 +58,9 @@ def answer(
         store (VectorStore): 검색에 사용할 벡터 저장소.
         llm (LLMClient): 답변 생성에 사용할 LLM 클라이언트.
         top_k (int): 컨텍스트에 포함할 청크 수.
+            실험 A3에서 5에서 8로 늘렸을 때 답변 점수가 21에서 23으로 올랐다.
+            정답이 큰 함수 안에 있어 상위 5개에 들지 못하던 경우가 해소됐다.
+            ctxd 규모(67청크)에서 관찰된 값이므로 일반적 최적값은 아니다.
 
     Returns:
         tuple[str, list[Chunk]]: 답변 텍스트와 근거로 사용된 청크 목록.

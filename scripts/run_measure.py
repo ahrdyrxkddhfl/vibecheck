@@ -26,11 +26,11 @@ from vibecheck.services.qa import answer
 from vibecheck.store.vector import VectorStore
 
 QUESTIONS_PATH = Path("experiments/exp_a_questions.json")
-OUTPUT_PATH = Path("experiments/exp_a_results.md")
+OUTPUT_PATH = Path("experiments/exp_a3_results_topk8.md")
 
 TARGET = str(Path.home() / "work/vibecheck-targets/ctxd")
-PERSIST_DIR = ".vibecheck/cache_ctxd/chroma"
-TOP_K = 5
+PERSIST_DIR = ".vibecheck/cache_ctxd_l1/chroma"
+TOP_K = 8
 
 def load_chunks() -> list[Chunk]:
     """저장된 인덱스로부터 코드 본문이 채워진 청크 목록을 복원한다.
@@ -134,14 +134,13 @@ def run() -> None:
     store = VectorStore(persist_dir=PERSIST_DIR)
 
     header = (
-        "# 실험 A — 본 측정 (인덱스 제공)\n\n"
+        "# 실험 A3 — top_k 5->8 (인덱스는 A2와 동일)\n\n"
         f"- 실행 시각: {datetime.now():%Y-%m-%d %H:%M}\n"
         f"- 대상: {data['target']}\n"
-        f"- 인덱스: {PERSIST_DIR} (9파일 {len(chunks)}청크, tests 제외)\n"
+        f"- 인덱스: {PERSIST_DIR} (9파일 {len(chunks)}청크, tests 제외, L1 포함)\n"
         f"- top_k: {TOP_K}\n"
         "- 채점: `exp_a_grading.md` 기준. 검색 순위는 자동, 답변 품질은 수동\n"
-        "- 대조군: `exp_a_control.md` (4/27)\n\n"
-        "---\n\n"
+        "- 대조군: `exp_a2_results_l1.md` (21/27, top_k=5)\n\n"
     )
     OUTPUT_PATH.write_text(header, encoding="utf-8")
 
@@ -181,7 +180,7 @@ if __name__ == "__main__":
     if not QUESTIONS_PATH.exists():
         print(f"질문 파일이 없습니다: {QUESTIONS_PATH}")
         sys.exit(1)
-    if "### 답변" in OUTPUT_PATH.read_text(encoding="utf-8"):
+    if OUTPUT_PATH.exists() and "### 답변" in OUTPUT_PATH.read_text(encoding="utf-8"):
         print(f"이미 측정된 파일입니다: {OUTPUT_PATH}")
         print("다시 측정하려면 파일을 비우거나 이름을 바꾸세요.")
         sys.exit(1)

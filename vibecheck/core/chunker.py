@@ -61,6 +61,78 @@ def to_chunks(
         )
     return chunks
 
+def to_file_chunk(
+        chunks: list[Chunk],
+        file_path: str,
+        total_lines: int,
+        imports: list[str] | None = None,
+) -> Chunk | None:
+    """한 파일의 L2 청크들을 묶어 파일 수준(L1) 청크를 만든다.
+
+    함수, 클래스 단위 청크만으로는 답할 수 없는 질문이 있다.
+    "이 파일은 어떤 HTTP 라이브러리를 쓰나"의 답은 파일 상단 import 줄에 있는데,
+    그 줄은 어떤 함수에도 속하지 않아 L2 청크 어디에도 담기지 않는다.
+    Chunk.imports로 요약 프롬프트에는 넣었으나 그것은 검색 대상이 아니다.
+
+    LLM을 다시 호출하지 않고 기존 요약을 조립하는 이유는 재현성이다.
+    파일 요약을 매번 생성하면 실행마다 내용이 달라져,
+    검색 성능이 올랐을 때 L1 도입 효과인지 요약이 우연히 잘 나온 것인지 구분할 수 없다.
+    또한 임베딩 검색은 문장의 매끄러움보다 키워드의 존재에 반응하므로,
+    httpx라는 단어가 텍스트에 있는지가 문장이 자연스러운지보다 중요하다.
+
+    Args:
+        chunks (list[Chunk]): 같은 파일에서 생성된 L2 청크 목록.
+            요약이 채워진 뒤에 호출해야 한다.
+        file_path (str): 레포 루트 기준 상대 경로.
+        total_lines (int): 파일의 총 줄 수.
+        imports (list[str] | None): 파일의 import문 목록.
+
+    Returns:
+        Chunk | None: 파일 수준 청크. 청크가 없는 파일이면 None.
+    """
+    if not chunks:
+        return None
+
+    import_list = imports or []
+
+    lines = [f"파일: {file_path}", ""]
+
+    if import_list:
+        lines.append("import 목록:")
+        lines.extend(f" {imp}" for imp in import_list)
+        lines.append("")
+
+    lines.append(f"정의된 심볼 {len(chunks)}개:")
+    for c in chunks:
+        prefix = "class " if c.kind == "class" else ""
+        lines.append(f" {prefix}{c.symbol}")
+    lines.append("")
+
+    # 심볼별 요약을 함께 실어 파일 개요만으로도 무슨 일을 하는 파일인지 읽히게 한다.
+    summarized = [c for c in chunks if c.summary]
+    if summarized:
+        lines.append("각 심볼 요약:")
+        lines.extend(f" {c.symbol}: {c.summary}" for c in summarized)
+    overview = "\n".join(lines)
+
+    # 요약 필드에는 검색 임베딩에 실릴 핵심만 담는다.
+    # 심볼 이름과 라이브러리명이 질의어와 직접 매칭되는 부분이기 때문이다.
+    symbol_names = ", ".join(c.symbol for c in chunks)
+    summary_parts = [f"{file_path} 파일"]
+    if import_list:
+        summary_parts.append(f"사용 라이브러리: {', '.join(import_list)}")
+    summary_parts.append(f"정의: {symbol_names}")
+
+    return Chunk(
+        file=file_path,
+        symbol=file_path,
+        kind="file",
+        start_line=1,
+        end_line=total_lines,
+        code=overview,
+        imports=import_list,
+        summary=" / ".join(summary_parts),
+    )
 
 # ================
 # 실행부

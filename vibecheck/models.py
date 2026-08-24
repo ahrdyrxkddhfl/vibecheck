@@ -45,7 +45,9 @@ class Chunk:
         file (str): 레포 루트 기준 상대 경로.
         symbol (str): 소속을 포함한 전체 이름 (예: "Auth.login").
             단독 이름보다 검색 정확도가 높아 이 형태로 저장한다.
-        kind (str): "class", "method", "function" 중 하나.
+        kind (str): "file", "class", "method", "function" 중 하나.
+            "file"은 파일 전체를 하나로 묶은 개요 청크(L1)이며,
+            함수 단위로는 담기지 않는 import 정보와 심볼 목록을 검색 대상으로 만든다.
         start_line (int): 시작 행 번호 (1-based).
         end_line (int): 끝 행 번호 (1-based, 포함).
         code (str): 심볼의 실제 소스 코드 본문.

@@ -21,7 +21,9 @@ from pathlib import Path
 # 무엇을 어떤 조건으로 쟀는지가 코드에 남아 있어야 나중에 재현할 수 있다.
 # 다만 홈 디렉토리 경로는 사용자 이름이 드러나므로 Path.home()으로 대체한다.
 TARGET = str(Path.home() / "work/vibecheck-targets/ctxd")
-PERSIST_DIR = ".vibecheck/cache_ctxd"
+# L1 도입 전 인덱스를 보존한다. 같은 컬렉션에 덮어쓰면
+# 실험 A 결과를 재현할 수 없어 개선 전후를 비교할 수 없다.
+PERSIST_DIR = ".vibecheck/cache_ctxd_l1"
 EXCLUDE = {"tests"}
 
 def main() -> None:
