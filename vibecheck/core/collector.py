@@ -44,15 +44,24 @@ MAX_FILE_SIZE = 500 * 1024
 파싱과 요약 비용은 크므로 제외한다.
 """
 
-def collect_files(root: str) -> list[Path]:
+def collect_files(root: str, exclude_dirs: set[str] | None = None) -> list[Path]:
     """레포에서 인덱싱 대상 파일 목록을 수집한다.
-    
+
     디렉토리를 재귀 순회하되, 제외 대상 디렉토리는 하위까지 통째로 건너뛴다.
     순회 후 필터링하지 않고 진입 자체를 막는 이유는 node_modules처럼
     파일 수가 수만 개인 디렉토리에서 순회 비용 자체가 문제가 되기 때문이다.
 
+    exclude_dirs는 EXCLUDE_DIRS를 대체하지 않고 합친다.
+    대체를 허용하면 호출자가 tests 하나를 빼려다 .venv까지 풀어버리는 사고가 나는데,
+    이 사고는 예외 없이 조용히 진행되어 수천 개의 무관한 파일이 LLM 요약까지 흘러간다.
+    추가는 안전하고 해제는 위험하므로 방향을 한쪽으로만 연다.
+
     Args:
         root (str): 레포 루트 경로.
+        exclude_dirs (set[str] | None): 기본 제외 목록에 더할 디렉토리 이름.
+            실험 A에서 테스트를 채점용 정답지로 쓸 때 인덱스에서 빼는 용도다.
+            평소에는 넘기지 않는다. 테스트는 사용 예시를 담고 있어
+            독스트링이 없는 레포일수록 검색에 도움이 되기 때문이다.
 
     Returns:
         list[Path]: 수집된 파일 경로 목록. 경로순으로 정렬되어
@@ -65,6 +74,10 @@ def collect_files(root: str) -> list[Path]:
     if not root_path.is_dir():
         raise ValueError(f"디렉토리가 아닙니다: {root}")
 
+    # 디렉토리 이름만 보고 거르므로 tests 폴더 밖에 흩어진 test_*.py는 남는다.
+    # 대상 레포가 테스트를 한곳에 모아두는 관례를 따를 때만 완전히 걸러진다.
+    excluded = EXCLUDE_DIRS | set(exclude_dirs or ())
+
     results = []
 
     def scan(directory: Path) -> None:
@@ -76,7 +89,7 @@ def collect_files(root: str) -> list[Path]:
         for entry in directory.iterdir():
             if entry.is_dir():
                 # 제외 대상이거나 숨김 디렉토리면 진입하지 않는다.
-                if entry.name in EXCLUDE_DIRS or entry.name.startswith("."):
+                if entry.name in excluded or entry.name.startswith("."):
                     continue
                 scan(entry)
             elif entry.suffix in EXTENSIONS:
