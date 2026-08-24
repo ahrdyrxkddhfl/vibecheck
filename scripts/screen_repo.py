@@ -292,17 +292,22 @@ def count_internal_imports(tree: ast.AST, module_names: set[str]) -> int:
 
     return count
 
-def screen(root: str) -> None:
+def screen(root: str, exclude_dirs: set[str] | None = None) -> None:
     """레포를 스크리닝하고 결과를 출력한다.
 
     실제 인덱싱과 동일한 수집 규칙(collect_files)을 사용한다.
     스크리닝이 세는 파일과 인덱싱될 파일이 다르면
     예상 비용과 실제 비용이 어긋나 판정 자체가 쓸모없어지기 때문이다.
 
+    같은 이유로 exclude_dirs도 인덱싱 때와 같은 값을 넘겨야 한다.
+    실험 A는 테스트를 채점용 정답지로 쓰느라 인덱스에서 빼는데,
+    스크리닝이 테스트를 포함해 세면 비용이 두 배 가까이 과대 추정된다.
+
     Args:
         root (str): 검사할 레포 루트 경로.
+        exclude_dirs (set[str] | None): 기본 제외 목록에 더할 디렉토리 이름.
     """
-    files = collect_files(root)
+    files = collect_files(root, exclude_dirs)
 
 
     if not files:
@@ -359,6 +364,8 @@ def screen(root: str) -> None:
 
     print(f"\n{'=' * 50}")
     print(f"대상: {root}")
+    if exclude_dirs:
+        print(f"제외: {', '.join(sorted(exclude_dirs))}")
     print(f"{'=' * 50}")
     print(f"파일 수      : {len(files)}개")
     print(f"총 라인 수   : {total_lines:,}줄")
@@ -400,5 +407,8 @@ def screen(root: str) -> None:
         print("판정: 부적합 - 파싱 실패가 많아 인덱싱 결과를 신뢰할 수 없음")
 
 if __name__ == "__main__":
+    # 두 번째 인자부터는 제외할 디렉토리 이름으로 받는다.
+    # 실험마다 조건이 달라지므로 코드에 박아두지 않고 실행할 때 정한다.
     target = sys.argv[1] if len(sys.argv) > 1 else "."
-    screen(target)
+    extra_excludes = set(sys.argv[2:]) or None
+    screen(target, extra_excludes)
