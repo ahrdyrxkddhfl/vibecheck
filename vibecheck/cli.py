@@ -15,6 +15,8 @@ from pathlib import Path
 
 import typer
 
+from vibecheck.core.overview import build_overview
+from vibecheck.services.report import build_report
 from vibecheck.llm.anthropic import AnthropicClient
 from vibecheck.models import Chunk
 from vibecheck.services.indexer import index_repo
@@ -193,6 +195,47 @@ def ask(
         for c in sources:
             typer.echo(f"  {c.file}:{c.start_line}-{c.end_line}  {c.symbol}")
 
+@app.command()
+def report(
+    repo: Path = typer.Argument(..., help="리포트를 만들 레포 경로"),
+    output: Path = typer.Option(
+        None, "--output", "-o", help="저장할 파일 경로 (기본: <레포>/WHYD_REPORT.md)"
+    ),
+    exclude: list[str] = typer.Option(
+        None, "--exclude", "-e", help="개요 계산에서 제외할 디렉토리 이름"
+    ),
+) -> None:
+    """인덱싱된 레포의 개요 리포트를 만든다.
+
+    Args:
+        repo (Path): 대상 레포 루트.
+        output (Path): 저장할 파일 경로.
+        exclude (list[str]): 인덱싱 때와 같은 제외 목록.
+            다른 값을 넘기면 내부/외부 판정이 인덱스와 어긋난다.
+    """
+    repo = repo.expanduser().resolve()
+    _, chroma_dir = index_paths(repo)
+
+    if not Path(chroma_dir).exists():
+        typer.secho(f"인덱스가 없습니다: {repo}", fg=typer.colors.RED)
+        typer.echo(f"먼저 인덱싱하세요:  whyd index {repo}")
+        raise typer.Exit(1)
+
+    chunks = load_indexed_chunks(repo, chroma_dir)
+    if not chunks:
+        typer.secho("인덱스가 비어 있습니다. 다시 인덱싱하세요.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    typer.echo("개요를 조립하는 중...")
+    overview = build_overview(str(repo), chunks, set(exclude) if exclude else None)
+
+    typer.echo("요약을 생성하는 중...")
+    text = build_report(overview, chunks, AnthropicClient(model=SUMMARY_MODEL))
+
+    target = output or (repo / "WHYD_REPORT.md")
+    target.write_text(text, encoding="utf-8")
+
+    typer.secho(f"\n리포트 생성 완료: {target}", fg=typer.colors.GREEN)
 
 def main() -> None:
     """콘솔 스크립트 진입점."""
