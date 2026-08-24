@@ -107,11 +107,19 @@ def walk(
     return results
 
 def extract_imports(root_node, source: bytes) -> list[str]:
-    """파일 최상단의 import문을 원문 그대로 수집한다.
+    """파일 최상단의 import문에서 모듈 이름을 수집한다.
 
     청크는 함수, 클래스 본문만 담기 때문에 파일 상단의 import가 잘려나간다.
     그 결과 요약 단계에서 모델이 어떤 라이브러리를 쓰는지 알 수 없어 추측으로 채우는 문제가 발생한다.
     실제로 tree-sitter를 쓰는 파서가 "파이썬 파서"로 요약되어 검색에서 누락되는 사례가 확인되었다.
+
+    원문이 아니라 모듈 이름만 남긴다.
+    이 값을 쓰는 세 곳(요약 프롬프트, 파일 개요 텍스트, 의존성 목록)이 모두 이름만 필요하고,
+    특히 의존성 목록은 이름이어야 내부 모듈과 외부 라이브러리를 가를 수 있다.
+    "from typing import Any" 같은 원문은 점으로 쪼개도 모듈 경로가 나오지 않아 대조가 불가능하다.
+
+    별칭(as)은 버리고 원래 이름을 남긴다.
+    import numpy as np에서 알고 싶은 것은 numpy를 쓴다는 사실이지 np라는 이름이 아니다.
 
     최상위 노드만 훑는 이유는 import가 관례적으로 파일 상단에 오기 때문이다.
     함수 내부의 지역 import까지 재귀 탐색하면 비용 대비 이득이 적다.
@@ -121,15 +129,41 @@ def extract_imports(root_node, source: bytes) -> list[str]:
         source (bytes): 원본 소스 바이트.
 
     Returns:
-        list[str]: import문 원문 목록. 없으면 빈 리스트.
+        list[str]: 모듈 이름 목록. 등장 순서를 유지하되 중복은 제거한다.
     """
-    imports = []
+    def text(node) -> str:
+        """노드가 가리키는 소스 구간을 문자열로 꺼낸다."""
+        return source[node.start_byte : node.end_byte].decode()
+
+    names: list[str] = []
 
     for child in root_node.children:
-        if child.type in ("import_statement", "import_from_statement"):
-            imports.append(source[child.start_byte : child.end_byte].decode())
+        if child.type == "import_statement":
+            # import a.b, c as d -> a.b, c
+            for item in child.named_children:
+                if item.type == "aliased_import":
+                    target = item.child_by_field_name("name")
+                    if target is not None:
+                        names.append(text(target))
+                elif item.type == "dotted_name":
+                    names.append(text(item))
 
-    return imports
+        elif child.type == "import_from_statement":
+            # from a.b import c -> a.b
+            # from . import c -> .
+            module = child.child_by_field_name("module_name")
+            if module is not None:
+                names.append(text(module))
+
+    # 같은 모듈에서 여러 이름을 가져오면 중복되므로 순서를 지키며 제거한다.
+    seen = set()
+    unique = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            unique.append(name)
+
+    return unique
 # ===================
 # 실행부(계속 수정 중...)
 # ===================

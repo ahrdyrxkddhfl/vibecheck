@@ -95,6 +95,9 @@ class VectorStore:
         메타데이터에 코드 본문을 넣지 않는 이유는 벡터DB의 역할이 '무엇이 관련 있는가'를 찾는 데
         한정되기 때문이다. 상세 정보는 관계형 DB에서 id로 조회한다.
 
+        다만 imports는 예외로 저장한다. 코드 본문에서 복원할 수 없기 때문이다.
+        청크는 함수 본문만 담아 파일 상단의 import가 들어 있지 않다.
+
         Args:
             chunks (list[Chunk]): 저장할 청크 목록.
         """
@@ -112,6 +115,9 @@ class VectorStore:
                     "start_line": c.start_line,
                     "end_line": c.end_line,
                     "summary": c.summary or "",
+                    # Chroma 메타데이터는 스칼라만 받으므로 쉼표로 이어 저장한다.
+                    # 인덱스에서 청크를 복원할 때 의존성 정보를 잃지 않기 위함이다.
+                    "imports": ",".join(c.imports),
                 }
                 for c in chunks
             ],

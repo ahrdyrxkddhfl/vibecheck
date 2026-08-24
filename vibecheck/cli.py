@@ -94,6 +94,7 @@ def load_indexed_chunks(repo: Path, persist_dir: str) -> list[Chunk]:
                 end_line=meta["end_line"],
                 code="\n".join(src_lines[meta["start_line"] - 1 : meta["end_line"]]),
                 summary=meta["summary"],
+                imports=meta.get("imports", "").split(",") if meta.get("imports") else [],
             )
         )
 
