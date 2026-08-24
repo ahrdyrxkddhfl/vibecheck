@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from vibecheck.core.collector import build_module_names, collect_files, is_internal_import
+from vibecheck.core.summarizer import load_prompt
+from vibecheck.llm.base import LLMClient
 from vibecheck.models import Chunk
 
 ENTRY_FILENAMES = {"__main__.py", "main.py", "cli.py", "app.py", "manage.py"}
@@ -29,6 +31,13 @@ STDLIB_NAMES = sys.stdlib_module_names
 
 하드코딩하지 않고 실행 중인 파이썬에서 가져온다.
 버전마다 목록이 달라지므로 직접 관리하면 반드시 어긋난다.
+"""
+
+README_LIMIT = 3000
+"""프롬프트에 넣을 README의 최대 글자 수.
+
+README는 길이가 제각각이고 설치법이나 라이선스가 뒤쪽을 차지하는 경우가 많다.
+프로젝트가 무엇인지는 대개 앞부분에 나오므로 앞에서 잘라 쓴다.
 """
 
 
@@ -64,7 +73,9 @@ class RepoOverview:
         external_deps (list[str]): 서드파티 라이브러리 이름 목록.
         stdlib_deps (list[str]): 표준 라이브러리 이름 목록.
         internal_import_count (int): 내부 모듈을 가리키는 import 수.
-        file_map (list[tuple[str, str]]): (파일 경로, 한 줄 역할) 목록.
+        file_map (list[tuple[str, str]]): (파일 경로, 파일 개요) 목록.
+            L1 청크의 code 필드를 쓴다. summary는 검색 임베딩용이라
+            키워드만 담고 있어 심볼별 설명이 빠져 있다.
         entry_points (list[EntryPoint]): 진입점 후보 목록.
         readme (str): README 본문. 없으면 빈 문자열.
     """
@@ -219,6 +230,43 @@ def read_readme(root: Path) -> str:
                 continue
     return ""
 
+def build_file_map(l1: list[Chunk], l2: list[Chunk]) -> list[tuple[str, str]]:
+    """파일별 개요를 조립한다.
+
+    L1 청크의 code를 쓰지 않는 이유는, 인덱스에서 청크를 복원할 때
+    줄 범위로 소스를 다시 읽기 때문이다.
+    L1은 파일 전체를 범위로 가지므로 code에 소스 원문이 통째로 들어간다.
+    요약 재료로는 소스가 아니라 심볼별 설명이 필요하다.
+
+    L1의 summary(라이브러리와 심볼 이름)에 L2의 심볼별 요약을 덧붙인다.
+    두 정보의 출처가 다르므로 여기서 합친다.
+
+    Args:
+        l1 (list[Chunk]): 파일 단위 청크 목록.
+        l2 (list[Chunk]): 함수·클래스 단위 청크 목록.
+
+    Returns:
+        list[tuple[str, str]]: (파일 경로, 개요 텍스트) 목록. 경로순 정렬.
+    """
+    by_file: dict[str, list[Chunk]] = {}
+    for chunk in l2:
+        by_file.setdefault(chunk.file, []).append(chunk)
+
+    result = []
+    for chunk in sorted(l1, key=lambda c: c.file):
+        lines = [chunk.summary or ""]
+
+        symbols = by_file.get(chunk.file, [])
+        if symbols:
+            lines.append("  심볼별 요약:")
+            lines += [
+                f"    {s.symbol}: {s.summary}" for s in symbols if s.summary
+            ]
+
+        result.append((chunk.file, "\n".join(lines)))
+
+    return result
+
 
 def build_overview(
     root: str,
@@ -254,7 +302,71 @@ def build_overview(
         external_deps=external,
         stdlib_deps=stdlib,
         internal_import_count=internal_count,
-        file_map=[(c.file, c.summary or "") for c in sorted(l1, key=lambda c: c.file)],
+        file_map=build_file_map(l1, l2),
         entry_points=find_script_entries(root_path) + find_code_entries(l2, root_path),
         readme=read_readme(root_path),
+    )
+
+
+
+def build_overview_prompt(overview: RepoOverview) -> str:
+    """레포 요약 생성에 넘길 재료를 조립한다.
+
+    파일 지도를 재료의 중심에 둔다.
+    개별 함수 요약까지 넣으면 재료가 수십 배로 늘어나는데,
+    "이 프로젝트가 무엇인가"에 답하는 데는 파일 단위 역할이면 충분하다.
+
+    Args:
+        overview (RepoOverview): 조립된 개요.
+
+    Returns:
+        str: 프롬프트에 넣을 재료 텍스트.
+    """
+    lines = [
+        f"프로젝트 이름: {overview.name}",
+        f"규모: 파일 {overview.file_count}개, 심볼 {overview.symbol_count}개, "
+        f"{overview.total_lines}줄",
+        "",
+        f"서드파티 의존성: {', '.join(overview.external_deps) or '없음'}",
+        "",
+        "진입점:",
+    ]
+
+    for entry in overview.entry_points:
+        mark = "확정" if entry.confirmed else "추정"
+        lines.append(f"  [{mark}] {entry.target} — {entry.evidence}")
+    if not overview.entry_points:
+        lines.append("  찾지 못함")
+
+    lines += ["", "파일별 역할:"]
+    for file_path, summary in overview.file_map:
+        lines.append(f"  {file_path}")
+        lines.append(f"    {summary}")
+
+    if overview.readme:
+        lines += ["", "README (앞부분):", overview.readme[:README_LIMIT]]
+    else:
+        lines += ["", "README: 없음"]
+
+    return "\n".join(lines)
+
+
+def summarize_repo(overview: RepoOverview, llm: LLMClient) -> str:
+    """레포 개요를 문장으로 요약한다.
+
+    조립만으로는 만들 수 없는 유일한 항목이다.
+    파일별 역할이 나열되어 있어도 "그래서 이게 무엇인가"는 종합해야 나온다.
+
+    Args:
+        overview (RepoOverview): 조립된 개요.
+        llm (LLMClient): 요약에 사용할 LLM 클라이언트.
+
+    Returns:
+        str: [한 줄]과 [개요] 절이 담긴 요약 텍스트.
+    """
+
+    return llm.complete(
+        load_prompt("summarize_repo"),
+        build_overview_prompt(overview),
+        max_tokens=1000,
     )
