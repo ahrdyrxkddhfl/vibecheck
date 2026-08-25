@@ -66,7 +66,10 @@ class RepoOverview:
     Attributes:
         root (str): 레포 루트 경로.
         name (str): 레포 이름.
-        file_count (int): 인덱싱된 파일 수.
+        file_count (int): 수집된 파일 수.
+            청크가 생긴 파일이 아니라 collect_files가 수집한 파일 전부다.
+            심볼도 import도 없는 빈 파일은 청크를 만들지 않지만
+            레포의 파일인 것은 맞으므로 규모에서 빼지 않는다.
         total_lines (int): 총 줄 수.
         symbol_count (int): 함수·클래스 청크 수.
         documented_count (int): 원본에 독스트링이 있던 심볼 수.
@@ -290,12 +293,16 @@ def build_overview(
     l1 = [c for c in chunks if c.kind == "file"]
     l2 = [c for c in chunks if c.kind != "file"]
 
-    module_names = build_module_names(collect_files(root, exclude_dirs), root)
+    # 수집 결과를 두 곳에서 쓴다. 모듈 이름 집합과 파일 수 계산이다.
+    # 청크가 있는 파일만 세면 빈 __init__.py 같은 파일이 빠져,
+    # whyd index가 말하는 수집 파일 수와 리포트의 규모가 어긋난다.
+    files = collect_files(root, exclude_dirs)
+    module_names = build_module_names(files, root)
     external, stdlib, internal_count = split_dependencies(l1 or l2, module_names)
     return RepoOverview(
         root=str(root_path),
         name=root_path.name,
-        file_count=len({c.file for c in chunks}),
+        file_count=len(files),
         total_lines=sum(c.end_line for c in l1),
         symbol_count=len(l2),
         documented_count=sum(1 for c in l2 if c.summary),
