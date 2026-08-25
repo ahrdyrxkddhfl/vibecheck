@@ -34,7 +34,13 @@ from vibecheck.services.interview import build_questions, format_questions
 from vibecheck.services.practice import grade
 from vibecheck.services.qa import answer
 from vibecheck.services.report import build_report
-from vibecheck.store.records import connect, get_repo_id, save_questions
+from vibecheck.store.records import (
+    connect,
+    count_questions,
+    get_question,
+    get_repo_id,
+    save_questions,
+)
 from vibecheck.store.vector import VectorStore
 
 app = typer.Typer(
@@ -303,7 +309,10 @@ def interview(
 @app.command()
 def practice(
     repo: Path = typer.Argument(..., help="답변을 채점할 레포 경로"),
-    question: str = typer.Option(..., "--question", "-q", help="답변한 질문"),
+    question: str = typer.Option(None, "--question", "-q", help="답변한 질문 (직접 입력)"),
+    question_no: int = typer.Option(
+        None, "--question-no", "-n", help="interview 질문 번호로 고르기"
+    ),
     answer_file: Path = typer.Option(
         None, "--answer-file", "-f", help="답변이 담긴 파일 경로"
     ),
@@ -329,6 +338,33 @@ def practice(
         top_k (int): 근거로 사용할 청크 수.
     """
     repo = repo.expanduser().resolve()
+        # 질문을 먼저 정한다. 번호로 고르면 저장된 질문에서 문장을 꺼내온다.
+    if question_no is not None:
+        conn = connect(repo)
+        repo_id = get_repo_id(conn, repo)
+        row = get_question(conn, repo_id, question_no)
+        total = count_questions(conn, repo_id)
+        conn.close()
+
+        if row is None:
+            if total == 0:
+                typer.secho("저장된 질문이 없습니다.", fg=typer.colors.RED)
+                typer.echo(f"먼저 질문을 만드세요:  whyd interview {repo}")
+            else:
+                typer.secho(
+                    f"{question_no}번 질문이 없습니다. 1에서 {total} 사이로 지정하세요.",
+                    fg=typer.colors.RED,
+                )
+            raise typer.Exit(1)
+
+        question = row["text"]
+        typer.echo(f"Q{question_no}. {question}")
+
+    elif question is None:
+        typer.secho(
+            "--question 또는 --question-no 중 하나가 필요합니다.", fg=typer.colors.RED
+        )
+        raise typer.Exit(1)
 
     if answer_file:
         try:
