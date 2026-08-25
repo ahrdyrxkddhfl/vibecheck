@@ -7,7 +7,7 @@
       "id": "D01",
       "type": "사실",
       "question": "이 패키지를 설치하면 어떤 명령어가 생기고, 그 명령은 어떤 함수를 부르나?",
-      "expected": "ctxd 명령이 생기고 ctxd.cli의 main을 부른다. 둘 다 맞아야 2점, 명령 이름만 맞으면 1점. 근거가 없다고 밝히면 1점, 지어내면 0점. 이 사실은 코드 어디에도 없다 — 조립 경로(find_script_entries)는 tomllib로 읽어 알지만 검색 경로는 모른다. 이 불일치가 실험 D의 출발점이다.",
+      "expected": "ctxd 명령이 생기고 ctxd.cli의 main을 부른다. 둘 다 맞아야 2점, 명령 이름만 맞으면 1점. 근거가 없다고 밝히면 1점, 지어내면 0점. 명령 이름 ctxd는 cli.py의 prog=\"ctxd\"에서 유추 가능하며 before에서 실제로 맞혔다. 그러나 진입 함수 ctxd.cli:main은 코드 어디에도 없다. 조립 경로(find_script_entries)는 tomllib로 읽어 알지만 검색 경로는 모른다. after에서 1점에서 2점으로 오르는지가 이 문항의 관측 대상이다.",
       "source": "pyproject.toml [project.scripts]",
       "in_index": "N",
       "gold_chunk": "pyproject.toml::pyproject.toml"
