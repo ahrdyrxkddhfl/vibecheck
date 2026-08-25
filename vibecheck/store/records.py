@@ -215,3 +215,60 @@ def count_questions(conn: sqlite3.Connection, repo_id: int) -> int:
         "SELECT COUNT(*) AS n FROM questions WHERE repo_id = ?", (repo_id,)
     ).fetchone()
     return row["n"]
+
+def save_answer(
+    conn: sqlite3.Connection,
+    repo_id: int,
+    feedback,
+    question_id: int | None = None,
+) -> int:
+    """채점 결과를 저장한다.
+
+    질문 문장을 question_id와 별개로 복사해 넣는다.
+    interview를 다시 돌리면 질문이 새로 생성되어 과거 채점이 사라진 질문을
+    가리키게 되는데, 그때도 무엇에 답한 기록인지는 남아야 한다.
+    정규화보다 기록의 자족성이 중요한 자리다.
+
+    주장은 별도 테이블에 행으로 푼다. JSON으로 뭉치면
+    "이 사용자가 반복해서 단정하는 주제"를 SQL로 셀 수 없다.
+    학습 진단이 보려는 것이 정확히 그것이다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+        repo_id (int): 대상 레포 id.
+        feedback (AnswerFeedback): 채점 결과.
+        question_id (int | None): 저장된 질문의 id. 직접 입력한 질문이면 None.
+
+    Returns:
+        int: 저장된 answers 행의 id.
+    """
+    cur = conn.execute(
+        "INSERT INTO answers "
+        "(repo_id, question_id, question_text, body, "
+        " specificity, calibration, groundedness, verdict_line, revision, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            repo_id,
+            question_id,
+            feedback.question,
+            feedback.user_answer,
+            feedback.specificity,
+            feedback.calibration,
+            feedback.groundedness,
+            feedback.verdict_line,
+            feedback.revision,
+            now(),
+        ),
+    )
+    answer_id = cur.lastrowid
+
+    for c in feedback.claims:
+        conn.execute(
+            "INSERT INTO claims "
+            "(answer_id, claim, verdict, hedged, evidence, note) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (answer_id, c.claim, c.verdict, 1 if c.hedged else 0, c.evidence, c.note),
+        )
+
+    conn.commit()
+    return answer_id

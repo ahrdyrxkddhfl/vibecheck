@@ -39,6 +39,7 @@ from vibecheck.store.records import (
     count_questions,
     get_question,
     get_repo_id,
+    save_answer,
     save_questions,
 )
 from vibecheck.store.vector import VectorStore
@@ -338,6 +339,7 @@ def practice(
         top_k (int): 근거로 사용할 청크 수.
     """
     repo = repo.expanduser().resolve()
+    question_id = None
         # 질문을 먼저 정한다. 번호로 고르면 저장된 질문에서 문장을 꺼내온다.
     if question_no is not None:
         conn = connect(repo)
@@ -358,6 +360,7 @@ def practice(
             raise typer.Exit(1)
 
         question = row["text"]
+        question_id = row["id"]
         typer.echo(f"Q{question_no}. {question}")
 
     elif question is None:
@@ -397,6 +400,11 @@ def practice(
     )
 
     print_feedback(fb)
+
+    # 화면에 뿌린 뒤 저장한다. 저장이 실패해도 사용자는 피드백을 이미 받았다.
+    conn = connect(repo)
+    save_answer(conn, get_repo_id(conn, repo), fb, question_id)
+    conn.close()
 
 
 def main() -> None:
