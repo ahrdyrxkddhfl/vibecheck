@@ -6,7 +6,7 @@
 둘째, 무관한 코드가 많이 섞이면 답변 품질이 떨어진다.
 """
 
-from vibecheck.core.summarizer import load_prompt
+from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import Chunk
 from vibecheck.store.vector import VectorStore

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from vibecheck.core.collector import build_module_names, collect_files, is_internal_import
-from vibecheck.core.summarizer import load_prompt
+from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import Chunk
 

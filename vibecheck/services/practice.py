@@ -14,7 +14,7 @@
 
 import json
 
-from vibecheck.core.summarizer import load_prompt
+from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import AnswerFeedback, Chunk, ClaimCheck
 from vibecheck.services.qa import build_context

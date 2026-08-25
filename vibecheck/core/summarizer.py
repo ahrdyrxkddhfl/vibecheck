@@ -6,26 +6,10 @@
 자연어 요약을 생성해 함께 임베딩하므로써 둘 사이를 연결한다.
 """
 
-from pathlib import Path
-
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import Chunk
+from vibecheck.prompts import load_prompt
 
-PROMPT_DIR = Path(__file__).parent.parent / "prompts"
-
-def load_prompt(name:str) -> str:
-    """프롬프트 파일을 읽는다.
-
-    프롬프트를 코드에 하드코딩하지 않고 파일로 분리한 이유는 반복적인 수정이 잦기 때문이다.
-    파일로 두면 프롬프트만 독립적으로 편집하고 변경 이력을 추적할 수 있다.
-
-    Args:
-        name (str) : 확장자를 제외한 프롬프트 파일 이름.
-
-    Returns:
-        str: 프롬프트 내용.
-    """
-    return (PROMPT_DIR / f"{name}.txt").read_text(encoding="utf-8")
 
 def build_user_message(chunk: Chunk) -> str:
     """요약 요청에 사용할 사용자 메시지를 구성한다.
