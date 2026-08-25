@@ -9,100 +9,70 @@
 레포마다 자기 인덱스를 갖게 되어 경로를 잘못 지정해 다른 레포의 청크가
 섞이는 사고가 구조적으로 차단된다. collect_files의 EXCLUDE_DIRS에
 .vibecheck가 있어 자기 인덱스를 자기가 인덱싱하는 일도 막힌다.
+
+인덱스를 여는 절차 자체는 services/index_access.py에 있다.
+이 모듈은 그 결과를 화면에 옮기는 일만 한다. 웹으로 옮길 때
+버려지는 것은 이 파일이고 services는 그대로 살아남는다.
 """
 
 from pathlib import Path
 
 import typer
 
-from vibecheck.services.interview import build_questions, format_questions
 from vibecheck.core.collector import collect_files
-from vibecheck.core.quirks import find_quirks, group_quirks
 from vibecheck.core.overview import build_overview
-from vibecheck.services.report import build_report
+from vibecheck.core.quirks import find_quirks, group_quirks
 from vibecheck.llm.anthropic import AnthropicClient
-from vibecheck.models import Chunk
+from vibecheck.services.index_access import (
+    IndexEmpty,
+    IndexNotFound,
+    index_paths,
+    open_index,
+)
 from vibecheck.services.indexer import index_repo
-from vibecheck.services.qa import answer
-from vibecheck.store.vector import VectorStore
+from vibecheck.services.interview import build_questions, format_questions
 from vibecheck.services.practice import grade
+from vibecheck.services.qa import answer
+from vibecheck.services.report import build_report
+from vibecheck.store.vector import VectorStore
 
 app = typer.Typer(
     help="독스트링 없는 코드베이스를 인덱싱해 자연어로 질문한다.",
     no_args_is_help=True,
 )
 
-INDEX_DIRNAME = ".vibecheck"
 SUMMARY_MODEL = "claude-haiku-4-5-20251001"
 ANSWER_MODEL = "claude-sonnet-4-6"
 
-
-def index_paths(repo: Path) -> tuple[str, str]:
-    """레포 경로로부터 캐시 장부와 벡터 저장소 경로를 만든다.
-
-    두 경로를 한곳에서 계산하는 이유는 요약 캐시와 벡터 인덱스가 짝을 이루기 때문이다.
-    한쪽만 남으면 캐시는 있는데 검색이 안 되거나 그 반대가 되어,
-    실패가 조용히 진행된다.
-
-    Args:
-        repo (Path): 대상 레포 루트.
-
-    Returns:
-        tuple[str, str]: (캐시 장부 디렉토리, 벡터 저장소 디렉토리).
-    """
-    base = repo / INDEX_DIRNAME
-    return str(base), str(base / "chroma")
+VERDICT_LABEL = {
+    "confirmed": ("확인됨", typer.colors.GREEN),
+    "contradicted": ("모순됨", typer.colors.RED),
+    "unverifiable": ("확인불가", typer.colors.YELLOW),
+}
 
 
-def load_indexed_chunks(repo: Path, persist_dir: str) -> list[Chunk]:
-    """저장된 인덱스로부터 코드 본문이 채워진 청크 목록을 복원한다.
+def open_or_exit(repo: Path) -> tuple[list, str]:
+    """인덱스를 열고, 실패하면 안내 후 종료한다.
 
-    벡터 저장소에는 임베딩 텍스트와 메타데이터만 있고 코드 원문이 없다.
-    answer()는 원문을 컨텍스트로 넘겨야 하므로 소스 파일에서 줄 범위를 다시 읽는다.
-
-    파일이 사라졌거나 줄 수가 줄었으면 그 청크를 건너뛴다.
-    인덱싱 이후 코드가 바뀌면 발생할 수 있는데, 여기서 멈추면
-    질문 자체가 불가능해지므로 남은 청크로 답하고 경고만 남긴다.
+    open_index가 던지는 예외를 CLI 화면 출력으로 옮기는 자리다.
+    services 계층이 typer를 모르게 하기 위해 이 변환을 CLI에 둔다.
+    웹에서는 같은 예외를 HTTP 응답으로 옮기게 된다.
 
     Args:
-        repo (Path): 대상 레포 루트.
-        persist_dir (str): 벡터 저장소 경로.
+        repo (Path): 대상 레포 루트. resolve된 상태여야 한다.
 
     Returns:
-        list[Chunk]: 코드 본문이 채워진 청크 목록.
+        tuple[list, str]: (청크 목록, 벡터 저장소 경로).
     """
-    import chromadb
-
-    col = chromadb.PersistentClient(path=persist_dir).get_collection("chunks")
-    got = col.get()
-
-    chunks = []
-    stale = 0
-
-    for meta in got["metadatas"]:
-        path = repo / meta["file"]
-        try:
-            src_lines = path.read_text(encoding="utf-8").split("\n")
-        except OSError:
-            stale += 1
-            continue
-
-        if meta["end_line"] > len(src_lines):
-            stale += 1
-            continue
-
-        chunks.append(
-            Chunk(
-                file=meta["file"],
-                symbol=meta["symbol"],
-                kind=meta["kind"],
-                start_line=meta["start_line"],
-                end_line=meta["end_line"],
-                code="\n".join(src_lines[meta["start_line"] - 1 : meta["end_line"]]),
-                summary=meta["summary"],
-                imports=meta.get("imports", "").split(",") if meta.get("imports") else [],
-            )
-        )
+    try:
+        chunks, chroma_dir, stale = open_index(repo)
+    except IndexNotFound:
+        typer.secho(f"인덱스가 없습니다: {repo}", fg=typer.colors.RED)
+        typer.echo(f"먼저 인덱싱하세요:  whyd index {repo}")
+        raise typer.Exit(1)
+    except IndexEmpty:
+        typer.secho("인덱스가 비어 있습니다. 다시 인덱싱하세요.", fg=typer.colors.RED)
+        raise typer.Exit(1)
 
     if stale:
         typer.secho(
@@ -111,7 +81,65 @@ def load_indexed_chunks(repo: Path, persist_dir: str) -> list[Chunk]:
             fg=typer.colors.YELLOW,
         )
 
-    return chunks
+    return chunks, chroma_dir
+
+
+def print_feedback(fb) -> None:
+    """채점 결과를 화면에 출력한다.
+
+    근거 없이 단정한 주장을 점수보다 먼저 보여준다.
+    면접에서 무너지는 지점이 정확히 거기이고, 주장 목록 안에 섞어두면
+    사용자가 지나칠 수 있다.
+
+    같은 '확인불가'라도 유보한 경우는 초록으로 표시한다.
+    verdict와 hedged를 분리해 저장한 이유가 화면에서 드러나는 지점이다.
+    코드에 근거가 없다는 것을 알고 그렇게 말한 것은 감점 사유가 아니다.
+
+    Args:
+        fb (AnswerFeedback): 채점 결과.
+    """
+    typer.echo(f"\n질문: {fb.question}")
+
+    typer.secho(
+        f"\n구체성 {fb.specificity}  판단보정 {fb.calibration}  "
+        f"근거밀착 {fb.groundedness}   합계 {fb.total}/6",
+        fg=typer.colors.CYAN,
+        bold=True,
+    )
+
+    risky = fb.risky_claims
+    if risky:
+        typer.secho(
+            f"\n근거 없이 단정한 지점 {len(risky)}개", fg=typer.colors.RED, bold=True
+        )
+        for c in risky:
+            typer.echo(f"  - {c.claim}")
+            if c.note:
+                typer.echo(f"    {c.note}")
+
+    if fb.claims:
+        typer.secho("\n주장별 판정", fg=typer.colors.CYAN)
+        for c in fb.claims:
+            label, color = VERDICT_LABEL[c.verdict]
+            # 확인불가여도 유보했으면 문제가 아니다. 색으로 구분해준다.
+            if c.verdict == "unverifiable" and c.hedged:
+                color = typer.colors.GREEN
+                label = "확인불가(유보함)"
+
+            typer.secho(f"  [{label}]", fg=color, nl=False)
+            typer.echo(f" {c.claim}")
+            if c.evidence:
+                typer.echo(f"           └ {c.evidence}")
+
+    if fb.verdict_line:
+        typer.secho(f"\n총평: {fb.verdict_line}", bold=True)
+    if fb.revision:
+        typer.echo(f"다시 쓴다면: {fb.revision}")
+
+    if fb.evidence_chunks:
+        typer.secho("\n채점에 사용한 근거:", fg=typer.colors.CYAN)
+        for loc in fb.evidence_chunks:
+            typer.echo(f"  {loc}")
 
 
 @app.command()
@@ -170,19 +198,7 @@ def ask(
         show_sources (bool): 근거 청크 목록 출력 여부.
     """
     repo = repo.expanduser().resolve()
-    persist_base, chroma_dir = index_paths(repo)
-
-    # 자동 인덱싱하지 않는다. 질문 한 번에 요금과 수 분이 나가는 것을
-    # 사용자가 모르는 채로 겪게 해서는 안 된다.
-    if not Path(chroma_dir).exists():
-        typer.secho(f"인덱스가 없습니다: {repo}", fg=typer.colors.RED)
-        typer.echo(f"먼저 인덱싱하세요:  whyd index {repo}")
-        raise typer.Exit(1)
-
-    chunks = load_indexed_chunks(repo, chroma_dir)
-    if not chunks:
-        typer.secho("인덱스가 비어 있습니다. 다시 인덱싱하세요.", fg=typer.colors.RED)
-        raise typer.Exit(1)
+    chunks, chroma_dir = open_or_exit(repo)
 
     text, sources = answer(
         question,
@@ -198,6 +214,7 @@ def ask(
         typer.secho("근거:", fg=typer.colors.CYAN)
         for c in sources:
             typer.echo(f"  {c.file}:{c.start_line}-{c.end_line}  {c.symbol}")
+
 
 @app.command()
 def report(
@@ -218,24 +235,15 @@ def report(
             다른 값을 넘기면 내부/외부 판정이 인덱스와 어긋난다.
     """
     repo = repo.expanduser().resolve()
-    _, chroma_dir = index_paths(repo)
-
-    if not Path(chroma_dir).exists():
-        typer.secho(f"인덱스가 없습니다: {repo}", fg=typer.colors.RED)
-        typer.echo(f"먼저 인덱싱하세요:  whyd index {repo}")
-        raise typer.Exit(1)
-
-    chunks = load_indexed_chunks(repo, chroma_dir)
-    if not chunks:
-        typer.secho("인덱스가 비어 있습니다. 다시 인덱싱하세요.", fg=typer.colors.RED)
-        raise typer.Exit(1)
+    chunks, _ = open_or_exit(repo)
+    excludes = set(exclude) if exclude else None
 
     typer.echo("개요를 조립하는 중...")
-    overview = build_overview(str(repo), chunks, set(exclude) if exclude else None)
+    overview = build_overview(str(repo), chunks, excludes)
 
     typer.echo("특이 지점을 찾는 중...")
     quirk_groups = group_quirks(
-        find_quirks(str(repo), collect_files(str(repo), set(exclude) if exclude else None))
+        find_quirks(str(repo), collect_files(str(repo), excludes))
     )
 
     typer.echo("요약을 생성하는 중...")
@@ -247,6 +255,7 @@ def report(
     target.write_text(text, encoding="utf-8")
 
     typer.secho(f"\n리포트 생성 완료: {target}", fg=typer.colors.GREEN)
+
 
 @app.command()
 def interview(
@@ -266,18 +275,13 @@ def interview(
         exclude (list[str]): 인덱싱 때와 같은 제외 목록.
     """
     repo = repo.expanduser().resolve()
-    _, chroma_dir = index_paths(repo)
-
-    if not Path(chroma_dir).exists():
-        typer.secho(f"인덱스가 없습니다: {repo}", fg=typer.colors.RED)
-        typer.echo(f"먼저 인덱싱하세요:  whyd index {repo}")
-        raise typer.Exit(1)
-
-    chunks = load_indexed_chunks(repo, chroma_dir)
+    chunks, _ = open_or_exit(repo)
     excludes = set(exclude) if exclude else None
 
     overview = build_overview(str(repo), chunks, excludes)
-    quirk_groups = group_quirks(find_quirks(str(repo), collect_files(str(repo), excludes)))
+    quirk_groups = group_quirks(
+        find_quirks(str(repo), collect_files(str(repo), excludes))
+    )
 
     # LLM을 부르지 않는다. 질문은 전부 조립이므로 비용도 대기도 없다.
     text = format_questions(build_questions(overview, quirk_groups), str(repo))
@@ -287,12 +291,6 @@ def interview(
         typer.secho(f"예상질문 생성 완료: {output}", fg=typer.colors.GREEN)
     else:
         typer.echo(text)
-
-VERDICT_LABEL = {
-    "confirmed": ("확인됨", typer.colors.GREEN),
-    "contradicted": ("모순됨", typer.colors.RED),
-    "unverifiable": ("확인불가", typer.colors.YELLOW),
-}
 
 
 @app.command()
@@ -313,6 +311,9 @@ def practice(
     웹으로 옮기면 버려질 코드이고, 파일로 두면 같은 답변을 조건을 바꿔가며
     반복 채점할 수 있어 채점기 자체를 검증하기에도 낫다.
 
+    답변을 먼저 읽고 인덱스를 나중에 여는 순서인 이유는, 답변 경로가 틀렸을 때
+    임베딩 모델을 올리는 몇 초를 기다린 뒤에 오류를 보게 하지 않기 위해서다.
+
     Args:
         repo (Path): 대상 레포 루트.
         question (str): 답변한 질문. 검색 쿼리로도 사용된다.
@@ -321,7 +322,6 @@ def practice(
         top_k (int): 근거로 사용할 청크 수.
     """
     repo = repo.expanduser().resolve()
-    _, chroma_dir = index_paths(repo)
 
     if answer_file:
         try:
@@ -332,22 +332,16 @@ def practice(
     elif answer_text:
         user_answer = answer_text
     else:
-        typer.secho("--answer-file 또는 --answer 중 하나가 필요합니다.", fg=typer.colors.RED)
+        typer.secho(
+            "--answer-file 또는 --answer 중 하나가 필요합니다.", fg=typer.colors.RED
+        )
         raise typer.Exit(1)
 
     if not user_answer.strip():
         typer.secho("답변이 비어 있습니다.", fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    if not Path(chroma_dir).exists():
-        typer.secho(f"인덱스가 없습니다: {repo}", fg=typer.colors.RED)
-        typer.echo(f"먼저 인덱싱하세요:  whyd index {repo}")
-        raise typer.Exit(1)
-
-    chunks = load_indexed_chunks(repo, chroma_dir)
-    if not chunks:
-        typer.secho("인덱스가 비어 있습니다. 다시 인덱싱하세요.", fg=typer.colors.RED)
-        raise typer.Exit(1)
+    chunks, chroma_dir = open_or_exit(repo)
 
     typer.echo("채점하는 중...")
     fb = grade(
@@ -362,61 +356,6 @@ def practice(
     print_feedback(fb)
 
 
-def print_feedback(fb) -> None:
-    """채점 결과를 화면에 출력한다.
-
-    근거 없이 단정한 주장을 점수보다 먼저 보여준다.
-    면접에서 무너지는 지점이 정확히 거기이고, 주장 목록 안에 섞어두면
-    사용자가 지나칠 수 있다.
-
-    같은 '확인불가'라도 유보한 경우는 초록으로 표시한다.
-    verdict와 hedged를 분리해 저장한 이유가 화면에서 드러나는 지점이다.
-    코드에 근거가 없다는 것을 알고 그렇게 말한 것은 감점 사유가 아니다.
-
-    Args:
-        fb (AnswerFeedback): 채점 결과.
-    """
-    typer.echo(f"\n질문: {fb.question}")
-
-    typer.secho(
-        f"\n구체성 {fb.specificity}  판단보정 {fb.calibration}  "
-        f"근거밀착 {fb.groundedness}   합계 {fb.total}/6",
-        fg=typer.colors.CYAN,
-        bold=True,
-    )
-
-    risky = fb.risky_claims
-    if risky:
-        typer.secho(f"\n근거 없이 단정한 지점 {len(risky)}개", fg=typer.colors.RED, bold=True)
-        for c in risky:
-            typer.echo(f"  - {c.claim}")
-            if c.note:
-                typer.echo(f"    {c.note}")
-
-    if fb.claims:
-        typer.secho("\n주장별 판정", fg=typer.colors.CYAN)
-        for c in fb.claims:
-            label, color = VERDICT_LABEL[c.verdict]
-            # 확인불가여도 유보했으면 문제가 아니다. 색으로 구분해준다.
-            if c.verdict == "unverifiable" and c.hedged:
-                color = typer.colors.GREEN
-                label = "확인불가(유보함)"
-
-            typer.secho(f"  [{label}]", fg=color, nl=False)
-            typer.echo(f" {c.claim}")
-            if c.evidence:
-                typer.echo(f"           └ {c.evidence}")
-
-    if fb.verdict_line:
-        typer.secho(f"\n총평: {fb.verdict_line}", bold=True)
-    if fb.revision:
-        typer.echo(f"다시 쓴다면: {fb.revision}")
-
-    if fb.evidence_chunks:
-        typer.secho("\n채점에 사용한 근거:", fg=typer.colors.CYAN)
-        for loc in fb.evidence_chunks:
-            typer.echo(f"  {loc}")
-        
 def main() -> None:
     """콘솔 스크립트 진입점."""
     app()
