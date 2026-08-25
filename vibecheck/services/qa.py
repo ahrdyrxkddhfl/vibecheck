@@ -29,7 +29,7 @@ def build_context(chunks: list[Chunk]) -> str:
         blocks.append(
             f"<chunk>\n"
             f"파일: {c.file}\n"
-            f"심볼: {c.symbol} ({c.kind}\n)"
+            f"심볼: {c.symbol} ({c.kind})\n"
             f"위치: {c.start_line}-{c.end_line}행\n"
             f"요약: {c.summary or '없음'}\n"
             f"\n"
