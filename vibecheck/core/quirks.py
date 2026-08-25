@@ -262,7 +262,8 @@ def group_quirks(quirks: list[Quirk]) -> list[QuirkGroup]:
         quirks (list[Quirk]): 묶을 발견 목록.
 
     Returns:
-        list[QuirkGroup]: 묶인 그룹 목록. 규모가 큰 것부터 정렬한다.
+        list[QuirkGroup]: 묶인 그룹 목록. 테스트 밖 발견을 앞에 두고
+            그다음 규모순으로 정렬한다.
     """
     buckets: dict[tuple[str, str], list[Quirk]] = {}
 
@@ -292,4 +293,16 @@ def group_quirks(quirks: list[Quirk]) -> list[QuirkGroup]:
             QuirkGroup(kind=kind, key=params, quirks=items, question=question)
         )
 
-    return sorted(groups, key=lambda g: -len(g.quirks))
+    def rank(group: QuirkGroup) -> tuple[int, int]:
+        """테스트 밖 발견을 앞에 두고, 그다음 규모순으로 놓는다.
+
+        개수만으로 줄을 세우면 테스트의 목 객체가 상위를 차지한다.
+        목은 진짜 함수의 시그니처를 흉내 내는 것이 존재 이유라 인자를
+        안 쓰는 것이 당연하고, "왜 이 모양인가"의 답이 코드 밖에 없다.
+        반면 핸들러나 저장소 인터페이스의 미사용 인자는 작성자가 고른
+        규약이라 설명할 거리가 있다.
+        """
+        all_tests = all("test" in q.file for q in group.quirks)
+        return (1 if all_tests else 0, -len(group.quirks))
+
+    return sorted(groups, key=rank)
