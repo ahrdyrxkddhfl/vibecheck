@@ -28,3 +28,4 @@ experiments/stripped/
 experiments/**/.vibecheck/
 data/repos/
 .vibecheck/
+WHYD_REPORT.md
