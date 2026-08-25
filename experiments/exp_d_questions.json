@@ -1,0 +1,43 @@
+{
+  "target": "ctxd-dev/ctxd",
+  "index_scope": "src/ 9 files + pyproject.toml, tests excluded, README not indexed",
+  "note": "실험 D: pyproject.toml 청크 1개를 기존 ctxd 인덱스에 upsert했을 때의 효과 측정. before는 청크 추가 전(gold_chunk가 인덱스에 없으므로 순위는 전부 miss가 정상이며, 볼 것은 답변 품질뿐). after는 추가 후. in_index 값은 before 시점 기준이다. 네 문항의 gold_chunk가 모두 동일하므로 독립 관측은 사실상 N=1 — 결과를 문항 수만큼의 증거로 읽으면 안 된다. 만점 8점. 기존 exp_a_questions.json 15문항(A3 기준선 23/27)을 네거티브 컨트롤 축으로 함께 재측정하며, 특히 Q05(httpx)와 Q09(pydantic/SearchItem)가 새 청크와 키워드를 공유해 간섭 위험이 있다.",
+  "questions": [
+    {
+      "id": "D01",
+      "type": "사실",
+      "question": "이 패키지를 설치하면 어떤 명령어가 생기고, 그 명령은 어떤 함수를 부르나?",
+      "expected": "ctxd 명령이 생기고 ctxd.cli의 main을 부른다. 둘 다 맞아야 2점, 명령 이름만 맞으면 1점. 근거가 없다고 밝히면 1점, 지어내면 0점. 이 사실은 코드 어디에도 없다 — 조립 경로(find_script_entries)는 tomllib로 읽어 알지만 검색 경로는 모른다. 이 불일치가 실험 D의 출발점이다.",
+      "source": "pyproject.toml [project.scripts]",
+      "in_index": "N",
+      "gold_chunk": "pyproject.toml::pyproject.toml"
+    },
+    {
+      "id": "D02",
+      "type": "사실",
+      "question": "이 프로젝트가 지원하는 파이썬 버전에 상한이 있나? 있다면 어디까지인가?",
+      "expected": "있다. 3.13 미만(>=3.11, <3.13). 상한의 존재와 3.13을 모두 짚어야 2점. 상한이 있다는 것만 맞히면 1점. 없다고 하면 0점. 하한 3.11은 코드 문법에서 유추될 수 있으나 상한은 흔적이 없으므로 상한만 채점한다. 이 문항은 유보가 정답이 아니다.",
+      "source": "pyproject.toml [project] requires-python",
+      "in_index": "N",
+      "gold_chunk": "pyproject.toml::pyproject.toml"
+    },
+    {
+      "id": "D03",
+      "type": "사실",
+      "question": "httpx의 최소 요구 버전은 몇인가?",
+      "expected": "0.28.1. 정확히 맞아야 2점. 근거가 없다고 밝히면 1점, 버전을 지어내면 0점. import httpx는 인덱스에 있으므로 라이브러리 이름을 대는 것만으로는 점수가 없다. before에서는 1점 또는 0점만 나와야 정상이다.",
+      "source": "pyproject.toml [project] dependencies",
+      "in_index": "N",
+      "gold_chunk": "pyproject.toml::pyproject.toml"
+    },
+    {
+      "id": "D04",
+      "type": "트랩",
+      "question": "이 프로젝트는 왜 표준 라이브러리 대신 pydantic을 골랐나?",
+      "expected": "의도는 코드에도 pyproject.toml에도 없다. 근거가 없다고 밝히면 2점, 사실만 짚고 유보하면 1점, 그럴듯한 이유를 단정하면 0점. 환각 트랩이므로 gold_chunk 순위는 채점 대상이 아니다 — 상위에 뜨는 것 자체가 위험 신호다. 청크 추가 후 D01~D03이 오르는데 이 문항이 내려가면, 검색이 개선된 것이 아니라 근거처럼 보이는 텍스트가 모델을 부추긴 것이다. 기존 세트의 '왜' 문항(Q07~Q09)과는 성격이 다르므로 type을 분리했다.",
+      "source": "없음",
+      "in_index": "N",
+      "gold_chunk": "pyproject.toml::pyproject.toml"
+    }
+  ]
+}
