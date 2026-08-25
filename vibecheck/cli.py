@@ -25,6 +25,7 @@ from vibecheck.models import Chunk
 from vibecheck.services.indexer import index_repo
 from vibecheck.services.qa import answer
 from vibecheck.store.vector import VectorStore
+from vibecheck.services.practice import grade
 
 app = typer.Typer(
     help="독스트링 없는 코드베이스를 인덱싱해 자연어로 질문한다.",
@@ -286,6 +287,135 @@ def interview(
         typer.secho(f"예상질문 생성 완료: {output}", fg=typer.colors.GREEN)
     else:
         typer.echo(text)
+
+VERDICT_LABEL = {
+    "confirmed": ("확인됨", typer.colors.GREEN),
+    "contradicted": ("모순됨", typer.colors.RED),
+    "unverifiable": ("확인불가", typer.colors.YELLOW),
+}
+
+
+@app.command()
+def practice(
+    repo: Path = typer.Argument(..., help="답변을 채점할 레포 경로"),
+    question: str = typer.Option(..., "--question", "-q", help="답변한 질문"),
+    answer_file: Path = typer.Option(
+        None, "--answer-file", "-f", help="답변이 담긴 파일 경로"
+    ),
+    answer_text: str = typer.Option(
+        None, "--answer", "-a", help="답변을 직접 입력 (짧은 답변용)"
+    ),
+    top_k: int = typer.Option(8, "--top-k", "-k", help="근거로 사용할 청크 수"),
+) -> None:
+    """작성한 면접 답변을 코드 근거와 대조해 채점한다.
+
+    답변을 파일로 받는 것이 기본이다. 여러 줄 입력을 터미널에서 받는 UX는
+    웹으로 옮기면 버려질 코드이고, 파일로 두면 같은 답변을 조건을 바꿔가며
+    반복 채점할 수 있어 채점기 자체를 검증하기에도 낫다.
+
+    Args:
+        repo (Path): 대상 레포 루트.
+        question (str): 답변한 질문. 검색 쿼리로도 사용된다.
+        answer_file (Path): 답변이 담긴 파일.
+        answer_text (str): 답변 직접 입력. answer_file이 우선한다.
+        top_k (int): 근거로 사용할 청크 수.
+    """
+    repo = repo.expanduser().resolve()
+    _, chroma_dir = index_paths(repo)
+
+    if answer_file:
+        try:
+            user_answer = answer_file.expanduser().read_text(encoding="utf-8")
+        except OSError as e:
+            typer.secho(f"답변 파일을 읽을 수 없습니다: {e}", fg=typer.colors.RED)
+            raise typer.Exit(1)
+    elif answer_text:
+        user_answer = answer_text
+    else:
+        typer.secho("--answer-file 또는 --answer 중 하나가 필요합니다.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    if not user_answer.strip():
+        typer.secho("답변이 비어 있습니다.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    if not Path(chroma_dir).exists():
+        typer.secho(f"인덱스가 없습니다: {repo}", fg=typer.colors.RED)
+        typer.echo(f"먼저 인덱싱하세요:  whyd index {repo}")
+        raise typer.Exit(1)
+
+    chunks = load_indexed_chunks(repo, chroma_dir)
+    if not chunks:
+        typer.secho("인덱스가 비어 있습니다. 다시 인덱싱하세요.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    typer.echo("채점하는 중...")
+    fb = grade(
+        question,
+        user_answer,
+        chunks,
+        VectorStore(persist_dir=chroma_dir),
+        AnthropicClient(model=ANSWER_MODEL),
+        top_k=top_k,
+    )
+
+    print_feedback(fb)
+
+
+def print_feedback(fb) -> None:
+    """채점 결과를 화면에 출력한다.
+
+    근거 없이 단정한 주장을 점수보다 먼저 보여준다.
+    면접에서 무너지는 지점이 정확히 거기이고, 주장 목록 안에 섞어두면
+    사용자가 지나칠 수 있다.
+
+    같은 '확인불가'라도 유보한 경우는 초록으로 표시한다.
+    verdict와 hedged를 분리해 저장한 이유가 화면에서 드러나는 지점이다.
+    코드에 근거가 없다는 것을 알고 그렇게 말한 것은 감점 사유가 아니다.
+
+    Args:
+        fb (AnswerFeedback): 채점 결과.
+    """
+    typer.echo(f"\n질문: {fb.question}")
+
+    typer.secho(
+        f"\n구체성 {fb.specificity}  판단보정 {fb.calibration}  "
+        f"근거밀착 {fb.groundedness}   합계 {fb.total}/6",
+        fg=typer.colors.CYAN,
+        bold=True,
+    )
+
+    risky = fb.risky_claims
+    if risky:
+        typer.secho(f"\n근거 없이 단정한 지점 {len(risky)}개", fg=typer.colors.RED, bold=True)
+        for c in risky:
+            typer.echo(f"  - {c.claim}")
+            if c.note:
+                typer.echo(f"    {c.note}")
+
+    if fb.claims:
+        typer.secho("\n주장별 판정", fg=typer.colors.CYAN)
+        for c in fb.claims:
+            label, color = VERDICT_LABEL[c.verdict]
+            # 확인불가여도 유보했으면 문제가 아니다. 색으로 구분해준다.
+            if c.verdict == "unverifiable" and c.hedged:
+                color = typer.colors.GREEN
+                label = "확인불가(유보함)"
+
+            typer.secho(f"  [{label}]", fg=color, nl=False)
+            typer.echo(f" {c.claim}")
+            if c.evidence:
+                typer.echo(f"           └ {c.evidence}")
+
+    if fb.verdict_line:
+        typer.secho(f"\n총평: {fb.verdict_line}", bold=True)
+    if fb.revision:
+        typer.echo(f"다시 쓴다면: {fb.revision}")
+
+    if fb.evidence_chunks:
+        typer.secho("\n채점에 사용한 근거:", fg=typer.colors.CYAN)
+        for loc in fb.evidence_chunks:
+            typer.echo(f"  {loc}")
         
 def main() -> None:
     """콘솔 스크립트 진입점."""

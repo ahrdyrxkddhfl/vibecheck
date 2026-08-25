@@ -6,6 +6,7 @@ Symbol은 "어디에 무엇이 있는가"만 알고, Chunk는 실제 코드 본�
 검색·요약에 필요한 메타데이터까지 갖는다.
 """
 
+from typing import Literal
 from dataclasses import dataclass, field
 
 
@@ -87,3 +88,93 @@ class Chunk:
             str: "파일경로::심볼명" 형식의 식별자.
         """
         return f"{self.file}::{self.symbol}"
+
+@dataclass
+class ClaimCheck:
+    """사용자 답변에서 뽑아낸 주장 하나와 그에 대한 코드 대조 결과.
+
+    verdict와 hedged를 분리해서 갖는 이유:
+    "코드에 근거가 없다"는 사실 판정이고, "그걸 단정했느냐"는 태도 판정이다.
+    둘은 독립적이며 채점에서 정반대로 작동한다. 근거 없는 주장을 단정하면
+    감점이지만, 같은 주장을 "추측이다"라고 밝히면 오히려 가점이다.
+    한 필드에 뭉뚱그리면 이 구분이 사라진다.
+
+    Attributes:
+        claim: 사용자 답변에서 추출한 주장 한 개. 원문 그대로가 아니라
+            한 문장으로 정리된 형태.
+        verdict: 근거 청크와 대조한 결과.
+            - "confirmed": 근거 청크가 이 주장을 지지함
+            - "contradicted": 근거 청크가 이 주장과 어긋남
+            - "unverifiable": 근거 청크에 관련 내용이 없음
+        hedged: 사용자가 이 주장에 유보 표현을 붙였는지 여부.
+            ("~일 수도 있다", "코드에 근거는 없다" 등)
+        evidence: 판정 근거가 된 위치. "파일::심볼" 형식.
+            verdict가 "unverifiable"이면 None.
+        note: 그렇게 판정한 이유 한 줄.
+    """
+
+    claim: str
+    verdict: Literal["confirmed", "contradicted", "unverifiable"]
+    hedged: bool
+    evidence: str | None = None
+    note: str = ""
+
+
+@dataclass
+class AnswerFeedback:
+    """면접 답변 한 건에 대한 채점 결과.
+
+    점수를 세 축으로 쪼개 갖는 이유:
+    총점 하나만 남기면 나중에 학습 진단에서 "무엇이 약한가"를 말할 수 없다.
+    "구체성은 되는데 추측을 단정한다"와 "태도는 좋은데 일반론만 한다"는
+    처방이 전혀 다르며, 총점으로는 두 경우가 같은 숫자로 보인다.
+
+    세 축에 가중치를 두지 않은 것은 의도적이다. calibration이 가장 중요하다고
+    보지만, 가중치를 먼저 넣으면 채점기의 변별력 부족과 가중치 부족을
+    구분할 수 없게 된다. 변별이 안 되는 것이 확인된 뒤에 손댄다.
+
+    Attributes:
+        question: 채점 대상이 된 질문.
+        user_answer: 사용자가 작성한 답변 원문.
+        claims: 답변에서 추출한 주장별 대조 결과.
+        specificity: 구체적 근거 (0-2). 파일·함수·동작을 짚었는가.
+        calibration: 확신과 추측의 구분 (0-2). 코드에 없는 것을 단정하지
+            않았는가. 세 축 중 면접 통과 여부를 가장 크게 가르는 항목.
+        groundedness: 코드를 읽은 흔적 (0-2). 일반론이 아니라 이 레포
+            얘기인가.
+        verdict_line: 한 줄 총평.
+        revision: 다시 답한다면 무엇을 어떻게 고칠지. 한두 문장.
+        evidence_chunks: 채점에 사용한 근거 청크의 위치 목록.
+            사용자가 "코드에서 확인하기"로 넘어갈 때의 출발점이 된다.
+    """
+
+    question: str
+    user_answer: str
+    claims: list[ClaimCheck] = field(default_factory=list)
+    specificity: int = 0
+    calibration: int = 0
+    groundedness: int = 0
+    verdict_line: str = ""
+    revision: str = ""
+    evidence_chunks: list[str] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        """세 축의 합 (0-6).
+
+        표시용이자 기록용이다. 진단에는 축별 점수를 쓰고,
+        총점은 "이번 답변이 나아졌는가"를 한눈에 볼 때만 쓴다.
+        """
+        return self.specificity + self.calibration + self.groundedness
+
+    @property
+    def risky_claims(self) -> list[ClaimCheck]:
+        """근거 없이 단정한 주장들.
+
+        면접에서 무너지는 지점이 정확히 여기다. 피드백 출력에서
+        가장 먼저 보여줘야 하므로 미리 뽑아둔다.
+        """
+        return [
+            c for c in self.claims
+            if c.verdict in ("unverifiable", "contradicted") and not c.hedged
+        ]
