@@ -7,9 +7,19 @@
 리포트, 질문, 연습, 타자, 진단이 각각 붙는다.
 """
 
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from vibecheck.web.routers import report
+
+STATIC_DIR = Path(__file__).parent / "static"
+"""화면 파일이 있는 디렉터리.
+
+패키지 안에 두는 이유는 어디서 서버를 띄우든 같은 경로를 가리키게 하기 위해서다.
+실행 디렉터리 기준 상대 경로로 두면 프로젝트 밖에서 실행할 때 화면이 사라진다.
+"""
 
 app = FastAPI(
     title="VibeCheck",
@@ -31,3 +41,9 @@ def health() -> dict[str, str]:
         dict[str, str]: 상태 문자열.
     """
     return {"status": "ok"}
+
+
+
+# 마운트를 맨 마지막에 하는 이유는 순서가 곧 우선순위이기 때문이다.
+# 루트에 먼저 마운트하면 /api와 /health까지 정적 파일 서빙이 가로챈다.
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

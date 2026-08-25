@@ -32,16 +32,23 @@ def get_overview(repo: RepoPath, index: Index) -> dict:
     경고 한 줄이 스크롤로 사라져도 방금 본 것이지만, 웹 화면은 계속
     남는다. 못 읽은 청크가 있다는 사실은 개요의 일부여야 한다.
 
+    인덱싱 조건(`meta`)을 `build_overview`에 넘기는 이유는 CLI와 같은
+    숫자를 내기 위해서다. 제외 목록 없이 계산하면 인덱싱에서 뺀 디렉터리가
+    파일 수와 내부 참조 수에 섞여 들어와 리포트와 화면이 어긋난다.
+    웹은 사용자에게 제외 목록을 물을 방법이 없으므로 장부 값이 유일한 근거다.
+
     Args:
         repo: 정규화된 레포 경로.
-        index: `open_index()`의 반환값 (청크, 벡터 저장소 경로, 건너뛴 수).
+        index: `open_index()`의 반환값
+            (청크, 벡터 저장소 경로, 건너뛴 수, 인덱싱 조건).
 
     Returns:
-        dict: 개요 필드와 `stale_count`.
+        dict: 개요 필드와 `stale_count`, `index_meta`.
     """
-    chunks, _chroma_dir, stale = index
+    chunks, _chroma_dir, stale, meta = index
 
-    overview = build_overview(str(repo), chunks)
+    excludes = set(meta.get("exclude_dirs") or ()) or None
+    overview = build_overview(str(repo), chunks, excludes)
     data = asdict(overview)
 
     readme = data.pop("readme", "")
@@ -53,5 +60,9 @@ def get_overview(repo: RepoPath, index: Index) -> dict:
     ]
 
     data["stale_count"] = stale
+
+    # 언제 어떤 조건으로 인덱싱됐는지를 화면에서 보여줄 수 있어야 한다.
+    # 숫자가 이상할 때 "인덱스가 오래됐나"를 먼저 의심할 근거가 된다.
+    data["index_meta"] = meta
 
     return data

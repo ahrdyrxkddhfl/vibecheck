@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VibeCheck</title>
+<style>
+  :root {
+    --bg: #fbfaf8;
+    --fg: #1c1a17;
+    --muted: #6b6560;
+    --faint: #9a938c;
+    --line: #e2ddd6;
+    --accent: #8a5a2b;
+    --warn: #a8500f;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2.5rem 1.5rem;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.65 -apple-system, "Apple SD Gothic Neo", system-ui, sans-serif;
+  }
+  main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 1.5rem; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin: 2.5rem 0 0.75rem; font-weight: 600;
+  }
+  form { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  input {
+    flex: 1; padding: 0.6rem 0.75rem; font: inherit;
+    border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    padding: 0.6rem 1.1rem; font: inherit; font-weight: 500;
+    border: 0; border-radius: 6px; background: var(--fg); color: var(--bg);
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #msg { color: var(--warn); min-height: 1.5rem; font-size: 0.9rem; }
+
+  .stats { display: flex; gap: 2.5rem; flex-wrap: wrap; }
+  .stat b { display: block; font-size: 1.6rem; font-weight: 600; letter-spacing: -0.02em; }
+  .stat span { font-size: 0.8rem; color: var(--muted); }
+
+  .tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .tag {
+    padding: 0.2rem 0.55rem; border: 1px solid var(--line);
+    border-radius: 4px; background: #fff;
+    font-family: var(--mono); font-size: 0.82rem;
+  }
+
+  .entry { padding: 0.35rem 0; border-bottom: 1px solid var(--line); }
+  .entry:last-child { border-bottom: 0; }
+/* 접힌 목록은 모듈 지도의 details와 생김새를 맞춘다.
+같은 동작인데 다르게 보이면 클릭할 수 있다는 걸 알아채기 어렵다. */
+  #entries details summary {
+    padding: 0.5rem 0; font-size: 0.85rem; color: var(--muted);
+  }
+  #entries details { border-bottom: 0; }
+  .mark {
+    display: inline-block; min-width: 3.2rem; font-size: 0.75rem;
+    font-weight: 600; color: var(--muted);
+  }
+  .mark.on { color: var(--accent); }
+  code { font-family: var(--mono); font-size: 0.88rem; }
+
+  /* 폴더는 파일과 다른 축이므로 색과 모양을 갈라야 계층이 읽힌다.
+     같은 회색 계열로 두었더니 목록 안에 묻혀 구분이 안 됐다. */
+  .dir {
+    display: inline-block;
+    margin: 1.75rem 0 0.4rem;
+    padding: 0.15rem 0.55rem 0.15rem 0.45rem;
+    background: #efe9e0; color: var(--accent);
+    border-radius: 4px;
+    font-family: var(--mono); font-size: 0.78rem; font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .dir::before { content: "📁 "; }
+  .dir:first-child { margin-top: 0; }
+
+  details { border-bottom: 1px solid var(--line); }
+  details summary {
+    padding: 0.45rem 0; cursor: pointer; list-style: none;
+    display: flex; gap: 0.6rem; align-items: baseline;
+  }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before {
+    content: "▸"; color: var(--faint); font-size: 0.7rem; flex: none;
+  }
+  details[open] summary::before { content: "▾"; }
+  .fname { font-family: var(--mono); font-size: 0.86rem; flex: none; }
+  /* 한 줄 요약은 넘치면 자른다. 줄바꿈되면 파일 목록의 리듬이 깨진다. */
+  .fnote {
+    color: var(--faint); font-size: 0.8rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  details pre {
+    margin: 0 0 0.75rem 1.3rem; padding: 0.75rem; background: #fff;
+    border: 1px solid var(--line); border-radius: 6px;
+    font-size: 0.82rem; white-space: pre-wrap; color: var(--muted);
+  }
+
+  .meta { font-size: 0.82rem; color: var(--muted); margin-top: 2.5rem; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>VibeCheck</h1>
+
+  <form id="form">
+    <input id="path" placeholder="~/work/my-repo" autocomplete="off" required>
+    <button id="go">개요 보기</button>
+  </form>
+  <div id="msg"></div>
+
+  <div id="result" hidden>
+    <h2>규모</h2>
+    <div class="stats" id="stats"></div>
+
+    <h2>외부 의존성</h2>
+    <div class="tags" id="deps"></div>
+
+    <h2>진입점</h2>
+    <div id="entries"></div>
+
+    <h2>모듈 지도</h2>
+    <div id="files"></div>
+
+    <div class="meta" id="meta"></div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+};
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const path = $("path").value.trim();
+  if (!path) return;
+
+  $("go").disabled = true;
+  $("msg").textContent = "개요를 조립하는 중...";
+  $("result").hidden = true;
+
+  try {
+    const res = await fetch("/api/overview?path=" + encodeURIComponent(path));
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || "요청 실패 (" + res.status + ")");
+    render(body);
+    $("msg").textContent = "";
+  } catch (err) {
+    $("msg").textContent = err.message;
+  } finally {
+    $("go").disabled = false;
+  }
+});
+
+/**
+ * 파일 개요에서 사람이 읽을 한 줄을 뽑는다.
+ *
+ * 첫 줄(summary)은 임베딩에 실릴 키워드 나열이라 "typing, copy, pyarrow"처럼
+ * 그 파일이 무엇을 하는지 알려주지 않는다. 대신 "심볼별 요약" 절의 첫 항목을
+ * 쓴다. 그것이 LLM이 코드를 읽고 만든 문장이다.
+ *
+ * 심볼이 없는 파일(재수출용 __init__.py 등)은 요약할 것이 없으므로
+ * 정의가 없다는 사실 자체를 알린다.
+ */
+function oneLine(path, overview) {
+  const lines = (overview || "").split("\n");
+  const at = lines.findIndex((l) => l.startsWith("  심볼별 요약:"));
+
+  if (at !== -1 && lines[at + 1]) {
+    // "    execute: 설명" 에서 심볼 이름을 떼고 설명만 남긴다.
+    const first = lines[at + 1].trim();
+    const cut = first.indexOf(": ");
+    const body = cut === -1 ? first : first.slice(cut + 2);
+    const more = lines.length - at - 2;
+    return more > 0 ? body + "  +" + more : body;
+  }
+
+  if ((overview || "").includes("정의된 함수·클래스 없음")) {
+    return "정의 없음 (재수출·설정 파일)";
+  }
+  return "";
+}
+
+/**
+ * 펼쳤을 때 보여줄 본문을 정리한다.
+ *
+ * 첫 줄(summary)은 임베딩용 키워드를 " / "로 이어붙인 것이라 그대로 두면
+ * 읽기 어렵다. 그렇다고 통째로 버리면 사용 라이브러리가 사라지는데,
+ * 그 정보는 화면 어디에도 없다. 상단 "외부 의존성"은 레포 전체 목록이라
+ * "이 파일이 무엇에 기대는가"에는 답하지 못한다.
+ *
+ * 파일 경로와 정의 목록은 버린다. 경로는 바로 위 파일명과 중복이고,
+ * 정의 목록은 아래 심볼별 요약에 설명과 함께 다시 나온다.
+ */
+function detailBody(overview) {
+  const lines = (overview || "").split("\n");
+  const head = lines[0] || "";
+
+  const out = [];
+
+  const libs = head.match(/사용 라이브러리: ([^/]+)/);
+  if (libs) out.push("라이브러리: " + libs[1].trim(), "");
+
+  const at = lines.findIndex((l) => l.startsWith("  심볼별 요약:"));
+  if (at !== -1) {
+    // 앞의 네 칸 들여쓰기를 없애 왼쪽 정렬을 맞춘다.
+    out.push(...lines.slice(at + 1).map((l) => l.replace(/^ {4}/, "")));
+  }
+
+  return out.join("\n").trim();
+}
+
+/** 경로를 디렉터리별로 묶는다. 루트 파일은 맨 앞에 온다. */
+function groupByDir(files) {
+  const groups = new Map();
+  for (const f of files) {
+    const cut = f.path.lastIndexOf("/");
+    const dir = cut === -1 ? "" : f.path.slice(0, cut);
+    const name = cut === -1 ? f.path : f.path.slice(cut + 1);
+    if (!groups.has(dir)) groups.set(dir, []);
+    groups.get(dir).push({ ...f, name });
+  }
+  return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function render(d) {
+  document.title = d.name + " — VibeCheck";
+
+  // 숫자는 화면에서 가장 먼저 읽히는 부분이라 위에 둔다.
+  $("stats").replaceChildren(...[
+    ["파일", d.file_count],
+    ["줄", d.total_lines.toLocaleString()],
+    ["함수·클래스", d.symbol_count],
+    ["파일 간 참조", d.internal_import_count],
+  ].map(([label, value]) => {
+    const box = el("div", "stat");
+    box.append(el("b", null, value), el("span", null, label));
+    return box;
+  }));
+
+  const deps = d.external_deps.length
+    ? d.external_deps.map((x) => el("span", "tag", x))
+    : [el("span", null, "서드파티 의존성이 없습니다.")];
+  $("deps").replaceChildren(...deps);
+
+  // 확정과 추정을 섞으면 읽는 사람이 확신도를 오해한다. CLI 리포트와 같은 규칙.
+  const entryRow = (e) => {
+    const row = el("div", "entry");
+    row.append(
+      el("span", e.confirmed ? "mark on" : "mark", e.confirmed ? "확정" : "추정"),
+      el("code", null, e.target),
+      el("span", null, " — " + e.evidence)
+    );
+    return row;
+  };
+
+  const confirmed = d.entry_points.filter((e) => e.confirmed);
+  const guessed = d.entry_points.filter((e) => !e.confirmed);
+
+  const entryNodes = [];
+  if (!d.entry_points.length) {
+    entryNodes.push(el("div", null, "진입점을 찾지 못했습니다."));
+  } else {
+    entryNodes.push(...confirmed.map(entryRow));
+
+    // 확정이 있을 때만 접는다. 확정이 없으면 추정이 유일한 단서이므로
+    // 접어두면 답을 감추는 셈이 된다. CLI 리포트와 같은 기준(4개 초과).
+    if (confirmed.length && guessed.length > 4) {
+      const box = el("details");
+      box.append(el("summary", null, "직접 실행 가능한 파일 " + guessed.length + "개"));
+      box.append(...guessed.map(entryRow));
+      entryNodes.push(box);
+    } else {
+      entryNodes.push(...guessed.map(entryRow));
+    }
+  }
+  $("entries").replaceChildren(...entryNodes);
+
+  const nodes = [];
+  for (const [dir, items] of groupByDir(d.file_map)) {
+    nodes.push(el("div", "dir", dir || "/"));
+    for (const f of items) {
+      const box = el("details");
+      const head = el("summary");
+      head.append(
+        el("span", "fname", f.name),
+        el("span", "fnote", oneLine(f.path, f.overview))
+      );
+      box.append(head, el("pre", null, detailBody(f.overview)));
+      nodes.push(box);
+    }
+  }
+  $("files").replaceChildren(...nodes);
+
+  // 숫자가 이상할 때 "인덱스가 오래됐나"를 먼저 의심할 근거가 된다.
+  const bits = [];
+  const m = d.index_meta || {};
+  if (m.indexed_at) bits.push("인덱싱 " + m.indexed_at.replace("T", " ").replace("+00:00", " UTC"));
+  if (m.exclude_dirs && m.exclude_dirs.length) bits.push("제외: " + m.exclude_dirs.join(", "));
+  if (!d.has_readme) bits.push("README 없음");
+  if (d.stale_count) bits.push("변경되어 건너뛴 청크 " + d.stale_count + "개");
+  $("meta").textContent = bits.join(" · ");
+
+  $("result").hidden = false;
+}
+</script>
+</body>
+</html>
