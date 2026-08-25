@@ -121,8 +121,15 @@ def extract_imports(root_node, source: bytes) -> list[str]:
     별칭(as)은 버리고 원래 이름을 남긴다.
     import numpy as np에서 알고 싶은 것은 numpy를 쓴다는 사실이지 np라는 이름이 아니다.
 
-    최상위 노드만 훑는 이유는 import가 관례적으로 파일 상단에 오기 때문이다.
-    함수 내부의 지역 import까지 재귀 탐색하면 비용 대비 이득이 적다.
+    파일 상단의 import만 훑되, try/if 블록 안까지는 들어간다.
+    선택적 의존성은 관례적으로 try: import x / except ImportError: 형태로 쓰이는데,
+    실제로 python-magic을 이렇게 쓰는 레포에서 서드파티 의존성이 통째로
+    비어 나오는 것을 확인했다. 문법적으로는 한 겹 안이지만 의미적으로는
+    파일 수준 선언이므로 상단 import와 같이 취급한다.
+
+    함수 정의 안으로는 여전히 들어가지 않는다.
+    지역 import는 순환 참조를 피하려는 것일 때가 많아 파일의 의존성으로
+    보기 어렵고, "이 파일이 무엇에 기대는가"라는 질문의 답이 아니다.
 
     Args:
         root_node: tree-sitter가 파싱한 루트 노드.
@@ -137,23 +144,46 @@ def extract_imports(root_node, source: bytes) -> list[str]:
 
     names: list[str] = []
 
-    for child in root_node.children:
-        if child.type == "import_statement":
-            # import a.b, c as d -> a.b, c
-            for item in child.named_children:
-                if item.type == "aliased_import":
-                    target = item.child_by_field_name("name")
-                    if target is not None:
-                        names.append(text(target))
-                elif item.type == "dotted_name":
-                    names.append(text(item))
+    def scan(nodes) -> None:
+        """같은 층의 노드들에서 import를 거두고, 감싸개는 한 겹 펼친다.
 
-        elif child.type == "import_from_statement":
-            # from a.b import c -> a.b
-            # from . import c -> .
-            module = child.child_by_field_name("module_name")
-            if module is not None:
-                names.append(text(module))
+        try/if는 자기 자신이 import가 아니라 import를 담는 그릇이다.
+        그릇을 풀지 않으면 안에 든 것이 통째로 보이지 않는다.
+
+        Args:
+            nodes: 훑을 노드 목록.
+        """
+        for child in nodes:
+            # 감싸개는 안을 들여다본다. block은 try/if가 본문을 담는 층이다.
+            if child.type in ("try_statement", "if_statement"):
+                for kid in child.children:
+                    if kid.type == "block":
+                        scan(kid.children)
+                    elif kid.type in ("except_clause", "else_clause", "elif_clause"):
+                        # 폴백 경로에서 대안 라이브러리를 import하는 경우가 있다.
+                        for g in kid.children:
+                            if g.type == "block":
+                                scan(g.children)
+                continue
+
+            if child.type == "import_statement":
+                # import a.b, c as d -> a.b, c
+                for item in child.named_children:
+                    if item.type == "aliased_import":
+                        target = item.child_by_field_name("name")
+                        if target is not None:
+                            names.append(text(target))
+                    elif item.type == "dotted_name":
+                        names.append(text(item))
+
+            elif child.type == "import_from_statement":
+                # from a.b import c -> a.b
+                # from . import c -> .
+                module = child.child_by_field_name("module_name")
+                if module is not None:
+                    names.append(text(module))
+
+    scan(root_node.children)
 
     # 같은 모듈에서 여러 이름을 가져오면 중복되므로 순서를 지키며 제거한다.
     seen = set()
