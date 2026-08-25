@@ -57,6 +57,30 @@ CHARS_PER_TOKEN = 4
 SUMMARY_TOKENS = 50
 """요약 한 건의 출력 토큰 수. 프롬프트가 60자 이내를 요구해 상한이 좁다."""
 
+MIN_CHUNKS = 10
+"""측정 대상으로 삼을 최소 청크 수.
+
+청크가 이보다 적으면 검색 자체가 성립하지 않는다.
+top_k가 8이므로 청크 10개짜리 레포는 거의 전부가 매번 컨텍스트에 들어가,
+"검색이 옳은 것을 골랐는가"를 측정할 수 없다.
+"""
+
+MAX_DOC_RATE = 80.0
+"""측정 대상으로 삼을 최대 독스트링 커버리지(%).
+
+이 도구는 설명이 없는 코드를 대상으로 하므로, 독스트링이 촘촘한 레포에서는
+LLM이 요약을 지어낼 필요가 없어 품질이 실제보다 좋게 나온다.
+실제로 자기 자신을 인덱싱한 초기 시험이 너무 쉬웠고,
+독스트링 100%인 외부 레포에서도 같은 문제가 반복됐다.
+"""
+
+COST_WARN = 0.30
+"""비용 주의선(USD).
+
+부적합 사유는 아니다. 다만 인덱싱은 되돌릴 수 없는 지출이므로
+사용자가 모르는 채로 누르는 일이 없어야 한다.
+"""
+
 def count_docstrings(tree: ast.AST) -> tuple[int, int]:
     """독스트링이 붙을 수 있는 대상과 실제로 붙은 개수를 센다.
 
@@ -326,11 +350,41 @@ def screen(root: str, exclude_dirs: set[str] | None = None) -> None:
         for rel, reason in failures:
             print(f"    - {rel}: {reason}")
 
+    # 판정 근거를 함께 찍는다. 통과/부적합만 보여주면 왜 그런지 알 수 없어
+    # 기준을 잊은 뒤에는 판정을 신뢰할 수도 재현할 수도 없다.
     print()
-    if rate >= 95:
-        print("판정: 통과 - 다음 지표 측정 가능")
+
+    blockers = []
+    if rate < 95:
+        blockers.append(
+            f"파싱 성공률 {rate:.1f}% < 95% — 인덱싱 결과를 신뢰할 수 없음"
+        )
+    if chunks < MIN_CHUNKS:
+        blockers.append(
+            f"청크 {chunks}개 < {MIN_CHUNKS}개 — top_k=8이면 거의 전부가 "
+            f"매번 검색되어 검색 품질을 측정할 수 없음"
+        )
+    if doc_rate > MAX_DOC_RATE:
+        blockers.append(
+            f"독스트링 {doc_rate:.1f}% > {MAX_DOC_RATE:.0f}% — 설명이 이미 충분해 "
+            f"이 도구의 대상이 아님. 품질이 실제보다 좋게 나옴"
+        )
+
+    warnings = []
+    if cost > COST_WARN:
+        warnings.append(f"예상 비용 ${cost:.3f} > ${COST_WARN:.2f} — 되돌릴 수 없는 지출")
+
+    if blockers:
+        print("판정: 부적합")
+        for reason in blockers:
+            print(f"    - {reason}")
+    elif warnings:
+        print("판정: 주의 - 진행은 가능하나 아래를 확인할 것")
+        for reason in warnings:
+            print(f"    - {reason}")
     else:
-        print("판정: 부적합 - 파싱 실패가 많아 인덱싱 결과를 신뢰할 수 없음")
+        print("판정: 적합")
+        print(f"    - 파싱 {rate:.1f}%, 청크 {chunks}개, 독스트링 {doc_rate:.1f}%, ${cost:.3f}")
 
 if __name__ == "__main__":
     # 두 번째 인자부터는 제외할 디렉토리 이름으로 받는다.
