@@ -66,6 +66,7 @@ def to_file_chunk(
         file_path: str,
         total_lines: int,
         imports: list[str] | None = None,
+        source_text: str = "",
 ) -> Chunk | None:
     """한 파일의 L2 청크들을 묶어 파일 수준(L1) 청크를 만든다.
 
@@ -80,20 +81,30 @@ def to_file_chunk(
     또한 임베딩 검색은 문장의 매끄러움보다 키워드의 존재에 반응하므로,
     httpx라는 단어가 텍스트에 있는지가 문장이 자연스러운지보다 중요하다.
 
+    심볼이 하나도 없는 파일도 청크를 만든다.
+    __init__.py는 정의가 없고 재수출 import만 있어 tree-sitter가 심볼을 찾지 못하는데,
+    그렇다고 내용이 없는 것은 아니다. "패키지가 무엇을 내보내는가"의 답이 거기에만 있다.
+    이 경우 조립할 심볼 목록이 없으므로 원문을 그대로 본문에 싣는다.
+    LLM 호출은 여전히 없다.
+
     Args:
         chunks (list[Chunk]): 같은 파일에서 생성된 L2 청크 목록.
-            요약이 채워진 뒤에 호출해야 한다.
+            요약이 채워진 뒤에 호출해야 한다. 비어 있어도 된다.
         file_path (str): 레포 루트 기준 상대 경로.
         total_lines (int): 파일의 총 줄 수.
         imports (list[str] | None): 파일의 import문 목록.
+        source_text (str): 파일 원문. 심볼이 없을 때만 본문 재료로 쓴다.
+            심볼이 있으면 조립된 개요가 더 압축적이므로 무시한다.
 
     Returns:
-        Chunk | None: 파일 수준 청크. 청크가 없는 파일이면 None.
+        Chunk | None: 파일 수준 청크.
+            심볼도 import도 원문도 없는 빈 파일이면 None.
     """
-    if not chunks:
-        return None
-
     import_list = imports or []
+
+    # 셋 다 없으면 인덱싱할 내용 자체가 없다. 빈 __init__.py가 이 경우다.
+    if not chunks and not import_list and not source_text.strip():
+        return None
 
     lines = [f"파일: {file_path}", ""]
 
@@ -102,26 +113,35 @@ def to_file_chunk(
         lines.extend(f" {imp}" for imp in import_list)
         lines.append("")
 
-    lines.append(f"정의된 심볼 {len(chunks)}개:")
-    for c in chunks:
-        prefix = "class " if c.kind == "class" else ""
-        lines.append(f" {prefix}{c.symbol}")
-    lines.append("")
+    if chunks:
+        lines.append(f"정의된 심볼 {len(chunks)}개:")
+        for c in chunks:
+            prefix = "class " if c.kind == "class" else ""
+            lines.append(f" {prefix}{c.symbol}")
+        lines.append("")
 
-    # 심볼별 요약을 함께 실어 파일 개요만으로도 무슨 일을 하는 파일인지 읽히게 한다.
-    summarized = [c for c in chunks if c.summary]
-    if summarized:
-        lines.append("각 심볼 요약:")
-        lines.extend(f" {c.symbol}: {c.summary}" for c in summarized)
+        # 심볼별 요약을 함께 실어 파일 개요만으로도 무슨 일을 하는 파일인지 읽히게 한다.
+        summarized = [c for c in chunks if c.summary]
+        if summarized:
+            lines.append("각 심볼 요약:")
+            lines.extend(f" {c.symbol}: {c.summary}" for c in summarized)
+    else:
+        lines.append("원문:")
+        lines.append(source_text)
+
     overview = "\n".join(lines)
 
     # 요약 필드에는 검색 임베딩에 실릴 핵심만 담는다.
     # 심볼 이름과 라이브러리명이 질의어와 직접 매칭되는 부분이기 때문이다.
-    symbol_names = ", ".join(c.symbol for c in chunks)
     summary_parts = [f"{file_path} 파일"]
     if import_list:
         summary_parts.append(f"사용 라이브러리: {', '.join(import_list)}")
-    summary_parts.append(f"정의: {symbol_names}")
+    if chunks:
+        symbol_names = ", ".join(c.symbol for c in chunks)
+        summary_parts.append(f"정의: {symbol_names}")
+    else:
+        # 정의가 없다는 사실 자체가 이 파일의 성격이다.
+        summary_parts.append("정의된 함수·클래스 없음")
 
     return Chunk(
         file=file_path,

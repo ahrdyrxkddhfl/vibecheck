@@ -57,28 +57,33 @@ def index_repo(
         tree, source = parse_file(str(path))
         symbols = walk(tree.root_node, source)
         imports = extract_imports(tree.root_node, source)
-        chunks = to_chunks(symbols, source, to_relative(path, root), imports)
 
-        if not chunks:
-            continue
+        rel = to_relative(path, root)
+        text = source.decode()
+        chunks = to_chunks(symbols, source, rel, imports)
 
-        # 캐시를 먼저 채운다. summarize()는 summary가 있으면 건너뛰므로 
-        # 이 한 줄로 변경되지 않은 청크의 LLM 호출이 사라진다.
-        cache_hits += manifest.apply(chunks, str(path))
+        # 심볼이 없는 파일도 L1까지는 내려보낸다.
+        # 여기서 continue하면 __init__.py처럼 정의가 없는 파일이
+        # 예외 한 줄 없이 인덱스에서 통째로 사라진다.
+        if chunks:
+            # 캐시를 먼저 채운다. summarize()는 summary가 있으면 건너뛰므로
+            # 이 한 줄로 변경되지 않은 청크의 LLM 호출이 사라진다.
+            cache_hits += manifest.apply(chunks, str(path))
 
-        summarize_all(chunks, llm)
-        manifest.update(chunks, str(path))
+            summarize_all(chunks, llm)
+            manifest.update(chunks, str(path))
 
-        all_chunks.extend(chunks)
+            all_chunks.extend(chunks)
 
         # L1은 L2 요약을 조립하므로 summarize_all 이후에 만든다.
         # manifest에는 넣지 않는다. 캐시의 단위는 LLM 호출인데
         # L1은 호출 없이 조립되므로 캐싱할 대상이 아니다.
         file_chunk = to_file_chunk(
             chunks,
-            to_relative(path, root),
-            len(source.decode().splitlines()),
+            rel,
+            len(text.splitlines()),
             imports,
+            source_text=text,
         )
         if file_chunk:
             all_chunks.append(file_chunk)
