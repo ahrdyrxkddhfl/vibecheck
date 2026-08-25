@@ -26,6 +26,20 @@ ENTRY_FILENAMES = {"__main__.py", "main.py", "cli.py", "app.py", "manage.py"}
 관례일 뿐 보장이 아니므로 추정 근거로만 쓰고, 확정된 근거와 구분해 표시한다.
 """
 
+NON_ENTRY_HINTS = ("test", "dummy", "example", "sample", "bench", "demo")
+"""진입점 후보에서 뒤로 밀 파일 이름 조각.
+
+직접 실행할 수 있는 것은 맞지만 "이 프로젝트는 어디서 시작하나"의 답은 아니다.
+실제로 dummy_test.py가 main.py와 같은 자리에 올라와 진짜 진입점을 흐렸고,
+scripts/ 아래 실험 스크립트 11개가 확정 진입점 1개를 묻었다.
+
+목록에서 지우지는 않는다. 직접 실행 가능한 것은 사실이므로
+지우면 거짓이 되고, 순서만 바꾸면 사실을 유지한 채 우선순위를 표현할 수 있다.
+
+디렉터리가 아니라 파일 이름을 보는 이유는 관례를 벗어난 배치 때문이다.
+dummy_test.py는 tests/ 밖에 있어 경로만으로는 걸러지지 않는다.
+"""
+
 STDLIB_NAMES = sys.stdlib_module_names
 """표준 라이브러리 모듈 이름 집합.
 
@@ -213,7 +227,28 @@ def find_code_entries(chunks: list[Chunk], root: Path) -> list[EntryPoint]:
         if chunk.symbol == "main" and chunk.file in found:
             found[chunk.file].evidence += ", main() 함수 정의됨"
 
-    return list(found.values())
+    def rank(entry: EntryPoint) -> tuple:
+        """진입점다운 정도로 정렬 키를 만든다.
+
+        낮을수록 앞에 온다. 세 단계로 가른다:
+        이름이 실험·테스트를 암시하는가, 루트에 있는가, 경로가 무엇인가.
+
+        Args:
+            entry (EntryPoint): 순위를 매길 진입점 후보.
+
+        Returns:
+            tuple: 정렬 키.
+        """
+        path = entry.target
+        name = path.rsplit("/", 1)[-1].lower()
+
+        weak = any(hint in name for hint in NON_ENTRY_HINTS)
+        # 루트에 있는 파일이 패키지 안쪽보다 진입점일 가능성이 높다.
+        nested = "/" in path
+
+        return (weak, nested, path)
+
+    return sorted(found.values(), key=rank)
 
 
 def read_readme(root: Path) -> str:

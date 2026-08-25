@@ -22,6 +22,18 @@ FOLD_THRESHOLD = 5
 모듈 지도 전체가 한눈에 들어오지 않는다.
 """
 
+ENTRY_FOLD_THRESHOLD = 4
+"""추정 진입점을 접어둘 기준 개수.
+
+확정 진입점이 있을 때만 접는다.
+pyproject.toml에 등록된 것이 있다는 것은 "이 프로젝트는 어디서 시작하는가"가
+이미 답해졌다는 뜻이고, 나머지는 참고 사항이다.
+실제로 확정 1개가 추정 19개에 묻혀 읽히지 않는 일이 있었다.
+
+확정이 없으면 접지 않는다. 그때는 추정이 유일한 단서이므로
+접어두면 답을 감추는 셈이 된다.
+"""
+
 
 def format_symbol_lines(symbols: list[Chunk]) -> list[str]:
     """심볼별 요약을 목록 줄로 만든다.
@@ -150,14 +162,31 @@ def build_report(
     lines.append(", ".join(f"`{d}`" for d in overview.stdlib_deps) or "없음")
     lines += ["", "</details>", "", "---", "", "## 4. 진입점", ""]
 
-    if overview.entry_points:
-        # 확정과 추정을 구분해 표시한다. 섞으면 읽는 사람이 확신도를 오해한다.
-        for entry in overview.entry_points:
-            mark = "**확정**" if entry.confirmed else "추정"
-            lines.append(f"- {mark} `{entry.target}` — {entry.evidence}")
-    else:
-        lines.append("진입점을 찾지 못했습니다. 라이브러리로만 쓰이는 코드일 수 있습니다.")
+    # 확정과 추정을 구분해 표시한다. 섞으면 읽는 사람이 확신도를 오해한다.
+    confirmed = [e for e in overview.entry_points if e.confirmed]
+    guessed = [e for e in overview.entry_points if not e.confirmed]
 
+    if not overview.entry_points:
+        lines.append("진입점을 찾지 못했습니다. 라이브러리로만 쓰이는 코드일 수 있습니다.")
+    else:
+        for entry in confirmed:
+            lines.append(f"- **확정** `{entry.target}` — {entry.evidence}")
+
+        guessed_lines = [
+            f"- 추정 `{e.target}` — {e.evidence}" for e in guessed
+        ]
+
+        # 확정이 있고 추정이 많을 때만 접는다.
+        if confirmed and len(guessed) > ENTRY_FOLD_THRESHOLD:
+            lines += [
+                "",
+                f"<details><summary>직접 실행 가능한 파일 {len(guessed)}개</summary>",
+                "",
+            ]
+            lines += guessed_lines
+            lines += ["", "</details>"]
+        else:
+            lines += guessed_lines
     lines += ["", "---", "", "## 5. 모듈 지도", ""]
     lines += format_module_map(overview, l2)
 
