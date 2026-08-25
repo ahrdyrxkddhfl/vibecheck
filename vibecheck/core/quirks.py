@@ -254,6 +254,10 @@ def group_quirks(quirks: list[Quirk]) -> list[QuirkGroup]:
     같은 규약을 따르는 함수들은 파일이 갈려 있어도 같은 이유로 그렇게 생겼고,
     파일 기준으로 묶으면 그 연결이 끊어진다.
 
+    묶인 개수와 무관하게 질문에 파일과 줄 번호를 넣는다. 같은 이름의 함수가
+    한 파일 안에 여러 번 지역 정의되는 경우(테스트의 mock_post 등)가 있어,
+    이름만 적으면 서로 다른 그룹의 질문이 같은 문장으로 보인다.
+
     Args:
         quirks (list[Quirk]): 묶을 발견 목록.
 
@@ -270,9 +274,15 @@ def group_quirks(quirks: list[Quirk]) -> list[QuirkGroup]:
     groups = []
     for (kind, params), items in buckets.items():
         if len(items) == 1:
-            question = items[0].question
+            one = items[0]
+            question = (
+                f"`{one.symbol}` ({one.file}:{one.line})은 "
+                f"왜 쓰지 않는 인자를 받나요?"
+            )
         else:
-            places = ", ".join(f"`{q.symbol}`" for q in items)
+            places = ", ".join(
+                f"`{q.symbol}` ({q.file}:{q.line})" for q in items
+            )
             question = (
                 f"{places} 이 {len(items)}개 함수가 모두 {params} 인자를 받고 "
                 f"쓰지 않습니다. 왜 이런 형태로 통일했나요?"
