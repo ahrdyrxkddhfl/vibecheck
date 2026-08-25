@@ -34,6 +34,7 @@ from vibecheck.services.interview import build_questions, format_questions
 from vibecheck.services.practice import grade
 from vibecheck.services.qa import answer
 from vibecheck.services.report import build_report
+from vibecheck.store.records import connect, get_repo_id, save_questions
 from vibecheck.store.vector import VectorStore
 
 app = typer.Typer(
@@ -284,8 +285,14 @@ def interview(
     )
 
     # LLM을 부르지 않는다. 질문은 전부 조립이므로 비용도 대기도 없다.
-    text = format_questions(build_questions(overview, quirk_groups), str(repo))
+    questions = build_questions(overview, quirk_groups)
+    text = format_questions(questions, str(repo))
 
+    # 질문을 저장해야 practice가 번호로 참조할 수 있다.
+    # 화면 출력과 무관하게 항상 저장한다.
+    conn = connect(repo)
+    save_questions(conn, get_repo_id(conn, repo), questions)
+    conn.close()
     if output:
         output.write_text(text, encoding="utf-8")
         typer.secho(f"예상질문 생성 완료: {output}", fg=typer.colors.GREEN)
