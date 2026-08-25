@@ -62,7 +62,7 @@ VERDICT_LABEL = {
 }
 
 
-def open_or_exit(repo: Path) -> tuple[list, str]:
+def open_or_exit(repo: Path) -> tuple[list, str, dict]:
     """인덱스를 열고, 실패하면 안내 후 종료한다.
 
     open_index가 던지는 예외를 CLI 화면 출력으로 옮기는 자리다.
@@ -73,10 +73,11 @@ def open_or_exit(repo: Path) -> tuple[list, str]:
         repo (Path): 대상 레포 루트. resolve된 상태여야 한다.
 
     Returns:
-        tuple[list, str]: (청크 목록, 벡터 저장소 경로).
+        tuple[list, str, dict]: (청크 목록, 벡터 저장소 경로, 인덱싱 조건).
+            조건은 report와 interview가 제외 목록을 복원하는 데 쓴다.
     """
     try:
-        chunks, chroma_dir, stale = open_index(repo)
+        chunks, chroma_dir, stale, meta = open_index(repo)
     except IndexNotFound:
         typer.secho(f"인덱스가 없습니다: {repo}", fg=typer.colors.RED)
         typer.echo(f"먼저 인덱싱하세요:  whyd index {repo}")
@@ -92,7 +93,29 @@ def open_or_exit(repo: Path) -> tuple[list, str]:
             fg=typer.colors.YELLOW,
         )
 
-    return chunks, chroma_dir
+    return chunks, chroma_dir, meta
+
+
+def resolve_excludes(exclude: list[str] | None, meta: dict) -> set[str] | None:
+    """개요 계산에 쓸 제외 목록을 정한다.
+
+    명시한 값이 이긴다. 없으면 인덱싱 때 쓴 값을 장부에서 복원한다.
+    매번 --exclude를 다시 치게 하면 빼먹었을 때 인덱스와 어긋난 숫자가
+    조용히 나온다. report와 interview가 같은 규칙을 써야 두 산출물의
+    숫자가 서로 어긋나지 않는다.
+
+    Args:
+        exclude (list[str] | None): 명령줄로 받은 제외 목록.
+        meta (dict): 장부에 기록된 인덱싱 조건.
+
+    Returns:
+        set[str] | None: 제외할 디렉토리 이름. 없으면 None.
+    """
+    if exclude:
+        return set(exclude)
+
+    stored = meta.get("exclude_dirs") or ()
+    return set(stored) or None
 
 
 def print_feedback(fb) -> None:
@@ -165,6 +188,7 @@ def index(
     Args:
         repo (Path): 인덱싱할 레포 루트.
         exclude (list[str]): 기본 제외 목록에 더할 디렉토리 이름.
+            장부에 함께 기록되므로 report와 interview에서는 다시 칠 필요가 없다.
     """
     repo = repo.expanduser().resolve()
     if not repo.is_dir():
@@ -209,7 +233,7 @@ def ask(
         show_sources (bool): 근거 청크 목록 출력 여부.
     """
     repo = repo.expanduser().resolve()
-    chunks, chroma_dir = open_or_exit(repo)
+    chunks, chroma_dir, _ = open_or_exit(repo)
 
     text, sources = answer(
         question,
@@ -242,12 +266,13 @@ def report(
     Args:
         repo (Path): 대상 레포 루트.
         output (Path): 저장할 파일 경로.
-        exclude (list[str]): 인덱싱 때와 같은 제외 목록.
-            다른 값을 넘기면 내부/외부 판정이 인덱스와 어긋난다.
+        exclude (list[str]): 제외할 디렉토리 이름.
+            넘기지 않으면 인덱싱 때 쓴 값을 장부에서 복원하므로
+            평소에는 지정할 필요가 없다.
     """
     repo = repo.expanduser().resolve()
-    chunks, _ = open_or_exit(repo)
-    excludes = set(exclude) if exclude else None
+    chunks, _, meta = open_or_exit(repo)
+    excludes = resolve_excludes(exclude, meta)
 
     typer.echo("개요를 조립하는 중...")
     overview = build_overview(str(repo), chunks, excludes)
@@ -283,11 +308,13 @@ def interview(
     Args:
         repo (Path): 대상 레포 루트.
         output (Path): 저장할 파일 경로. 없으면 화면에 출력한다.
-        exclude (list[str]): 인덱싱 때와 같은 제외 목록.
+        exclude (list[str]): 제외할 디렉토리 이름.
+            넘기지 않으면 인덱싱 때 쓴 값을 장부에서 복원한다.
+            report와 같은 규칙이라 두 산출물의 숫자가 어긋나지 않는다.
     """
     repo = repo.expanduser().resolve()
-    chunks, _ = open_or_exit(repo)
-    excludes = set(exclude) if exclude else None
+    chunks, _, meta = open_or_exit(repo)
+    excludes = resolve_excludes(exclude, meta)
 
     overview = build_overview(str(repo), chunks, excludes)
     quirk_groups = group_quirks(
@@ -303,6 +330,7 @@ def interview(
     conn = connect(repo)
     save_questions(conn, get_repo_id(conn, repo), questions)
     conn.close()
+
     if output:
         output.write_text(text, encoding="utf-8")
         typer.secho(f"예상질문 생성 완료: {output}", fg=typer.colors.GREEN)
@@ -337,13 +365,15 @@ def practice(
     Args:
         repo (Path): 대상 레포 루트.
         question (str): 답변한 질문. 검색 쿼리로도 사용된다.
+        question_no (int): interview 질문 번호. question과 둘 중 하나가 필요하다.
         answer_file (Path): 답변이 담긴 파일.
         answer_text (str): 답변 직접 입력. answer_file이 우선한다.
         top_k (int): 근거로 사용할 청크 수.
     """
     repo = repo.expanduser().resolve()
     question_id = None
-        # 질문을 먼저 정한다. 번호로 고르면 저장된 질문에서 문장을 꺼내온다.
+
+    # 질문을 먼저 정한다. 번호로 고르면 저장된 질문에서 문장을 꺼내온다.
     if question_no is not None:
         conn = connect(repo)
         repo_id = get_repo_id(conn, repo)
@@ -390,7 +420,7 @@ def practice(
         typer.secho("답변이 비어 있습니다.", fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    chunks, chroma_dir = open_or_exit(repo)
+    chunks, chroma_dir, _ = open_or_exit(repo)
 
     typer.echo("채점하는 중...")
     fb = grade(
@@ -408,6 +438,7 @@ def practice(
     conn = connect(repo)
     save_answer(conn, get_repo_id(conn, repo), fb, question_id)
     conn.close()
+
 
 @app.command()
 def history(

@@ -49,6 +49,8 @@ def index_repo(
         print(f"[1/3] 파일 {len(files)}개 수집")
 
     manifest = Manifest(persist_dir=persist_dir)
+    # 리포트·면접 질문이 같은 조건으로 계산되려면 조건이 남아 있어야 한다.
+    manifest.set_index_meta(exclude_dirs, len(files))
 
     all_chunks: list[Chunk] = []
     cache_hits = 0

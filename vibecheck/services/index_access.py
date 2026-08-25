@@ -10,6 +10,7 @@ CLI가 아니라 services에 두는 이유는 웹으로 옮길 때 그대로 쓰
 FastAPI 핸들러도 같은 절차가 필요하고, 그때 typer에 묶여 있으면 못 쓴다.
 """
 
+import json
 from pathlib import Path
 
 from vibecheck.models import Chunk
@@ -51,6 +52,37 @@ def index_paths(repo: Path) -> tuple[str, str]:
     """
     base = repo / INDEX_DIRNAME
     return str(base), str(base / "chroma")
+
+
+def load_index_meta(persist_dir: str) -> dict:
+    """장부에 기록된 인덱싱 조건을 읽는다.
+
+    리포트와 면접 질문은 인덱싱 때와 같은 파일 목록으로 계산되어야 한다.
+    사용자가 --exclude를 다시 치게 하면 빼먹었을 때 인덱스와 어긋난 숫자가
+    조용히 나오고, 웹에서는 아예 전달할 방법이 없다.
+
+    실패해도 예외를 올리지 않는다.
+    조건을 모르면 기본값으로 계산될 뿐이고, 그것 때문에 인덱스를 못 여는 것은
+    잃는 것이 더 크다. 1판 장부에는 이 절이 아예 없다.
+
+    Args:
+        persist_dir (str): 캐시 장부가 있는 디렉토리.
+
+    Returns:
+        dict: exclude_dirs, file_count, indexed_at을 담은 딕셔너리.
+            읽지 못했으면 빈 딕셔너리.
+    """
+    path = Path(persist_dir) / "manifest.json"
+    if not path.exists():
+        return {}
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    meta = raw.get("index") if isinstance(raw, dict) else None
+    return meta if isinstance(meta, dict) else {}
 
 
 def load_chunks(repo: Path, persist_dir: str) -> tuple[list[Chunk], int]:
@@ -108,7 +140,7 @@ def load_chunks(repo: Path, persist_dir: str) -> tuple[list[Chunk], int]:
     return chunks, stale
 
 
-def open_index(repo: Path) -> tuple[list[Chunk], str, int]:
+def open_index(repo: Path) -> tuple[list[Chunk], str, int, dict]:
     """인덱스를 열어 청크와 벡터 저장소 경로를 함께 반환한다.
 
     네 명령이 반복하던 절차를 하나로 묶은 것이다.
@@ -117,17 +149,23 @@ def open_index(repo: Path) -> tuple[list[Chunk], str, int]:
     자동 인덱싱은 하지 않는다. 질문 한 번에 요금과 수 분이 나가는 것을
     사용자가 모르는 채로 겪게 해서는 안 된다.
 
+    인덱싱 조건을 함께 돌려주는 이유는 호출자가 같은 파일 목록으로
+    계산해야 하기 때문이다. 청크만으로는 "무엇을 제외하고 인덱싱했는지"를
+    복원할 수 없고, 그것을 모르면 리포트의 통계가 인덱스와 어긋난다.
+
     Args:
         repo (Path): 대상 레포 루트. 호출 전에 resolve된 상태여야 한다.
 
     Returns:
-        tuple[list[Chunk], str, int]: (청크 목록, 벡터 저장소 경로, 건너뛴 청크 수).
+        tuple[list[Chunk], str, int, dict]: (청크 목록, 벡터 저장소 경로,
+            건너뛴 청크 수, 인덱싱 조건). 조건은 장부에서 읽으며,
+            1판 장부이거나 읽지 못했으면 빈 딕셔너리다.
 
     Raises:
         IndexNotFound: 벡터 저장소가 없을 때.
         IndexEmpty: 복원된 청크가 하나도 없을 때.
     """
-    _, chroma_dir = index_paths(repo)
+    persist_base, chroma_dir = index_paths(repo)
 
     if not Path(chroma_dir).exists():
         raise IndexNotFound(str(repo))
@@ -136,4 +174,4 @@ def open_index(repo: Path) -> tuple[list[Chunk], str, int]:
     if not chunks:
         raise IndexEmpty(str(repo))
 
-    return chunks, chroma_dir, stale
+    return chunks, chroma_dir, stale, load_index_meta(persist_base)

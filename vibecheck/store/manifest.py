@@ -1,4 +1,4 @@
-"""파일 해시 기반으로 요약을 캐시해 재인덱싱 비용을 줄인다.
+"""파일 해시 기반으로 요약을 캐시하고, 인덱싱 조건을 함께 기록한다.
 
 인덱싱의 대부분 비용은 LLM 요약 호출이다. 청크는 매번 새로 생성되어 summary가 항상 None이므로,
 캐시가 없으면 파일이 바뀌지 않아도 전체를 다시 요약한다.
@@ -10,34 +10,51 @@ git 브랜치 전환은 내용이 같아도 mtime을 바꾸고, 반대로 내용
 
 파일 단위로 묶는 이유는 파일이 바뀌면 그 안의 청크 대부분이 영향을 받기 때문이다.
 줄 번호가 밀리는 것만으로도 청크 경계가 달라진다.
+
+캐시와 함께 인덱싱 조건(exclude_dirs, 수집 파일 수)도 기록한다.
+이 정보가 없으면 리포트를 만들 때마다 사용자가 --exclude를 다시 쳐야 하고,
+빼먹으면 인덱스와 어긋난 숫자가 조용히 나온다. 웹에는 넘길 방법조차 없다.
+장부는 인덱싱이 여는 유일한 파일이므로 이 정보가 있어야 할 자리도 여기다.
 """
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from vibecheck.models import Chunk
 
+MANIFEST_VERSION = 2
+"""장부 형식 판.
+
+1판은 최상위가 파일 경로 딕셔너리여서 메타데이터를 넣을 자리가 없었다.
+2판은 files와 index로 나눈다. 파일 경로와 메타데이터 키가 섞이면
+경로 이름에 따라 충돌할 수 있고, 파일 수를 세는 코드도 틀린다.
+"""
+
+
 def file_hash(path: str) -> str:
-        """파일 내용의 SHA-256 해시를 계산한다.
+    """파일 내용의 SHA-256 해시를 계산한다.
 
-        바이너리로 읽는 이유는 인코딩 해석을 거치지 않기 위해서다.
-        줄바꿈 문자 처리 등으로 같은 파일이 다른 해시를 갖는 것을 막는다.
+    바이너리로 읽는 이유는 인코딩 해석을 거치지 않기 위해서다.
+    줄바꿈 문자 처리 등으로 같은 파일이 다른 해시를 갖는 것을 막는다.
 
-        Args:
-            path (str): 해시를 계산할 파일 경로.
+    Args:
+        path (str): 해시를 계산할 파일 경로.
 
-        Returns:
-            str: 16진수 해시 문자열.
-        """
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    Returns:
+        str: 16진수 해시 문자열.
+    """
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
 
 class Manifest:
-    """파일별 해시와 청크 요약을 보관하는 캐시 장부.
+    """파일별 해시·청크 요약과 인덱싱 조건을 보관하는 캐시 장부.
 
     Attributes:
-        path: manifest.json 파일 경로
+        path: manifest.json 파일 경로.
         data: 파일 경로를 키로 하는 캐시 내용.
+        meta: 인덱싱 조건. exclude_dirs, file_count, indexed_at.
     """
 
     def __init__(self, persist_dir: str = ".vibecheck"):
@@ -47,17 +64,53 @@ class Manifest:
         캐시가 없거나 손상되어도 인덱싱 자체는 성공해야 하기 때문이다.
         캐시는 속도를 위한 것이지 정확성의 근거가 아니다.
 
+        1판 장부는 형식을 알아보고 옮겨 담는다.
+        버려도 인덱싱은 성공하지만 전 청크가 재요약되어 비용이 나간다.
+        1판은 파일 딕셔너리 그 자체였으므로 files에 그대로 넣으면 된다.
+
         Args:
-            persis_dir (str): 장부를 저장할 디렉토리.
+            persist_dir (str): 장부를 저장할 디렉토리.
         """
         self.path = Path(persist_dir) / "manifest.json"
         self.data: dict = {}
+        self.meta: dict = {}
 
-        if self.path.exists():
-            try:
-                self.data = json.loads(self.path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                self.data = {}
+        if not self.path.exists():
+            return
+
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+
+        if not isinstance(raw, dict):
+            return
+
+        if "files" in raw:
+            self.data = raw.get("files") or {}
+            self.meta = raw.get("index") or {}
+        else:
+            # 1판: 최상위가 곧 파일 딕셔너리였다. 요약은 그대로 살린다.
+            self.data = raw
+
+    def set_index_meta(
+        self, exclude_dirs: set[str] | None, file_count: int
+    ) -> None:
+        """이번 인덱싱의 조건을 기록한다.
+
+        exclude_dirs를 정렬해 저장하는 이유는 집합의 순회 순서가
+        실행마다 달라 장부 파일에 의미 없는 차이가 생기기 때문이다.
+
+        Args:
+            exclude_dirs (set[str] | None): 기본 제외 목록에 더한 디렉토리 이름.
+            file_count (int): collect_files가 수집한 파일 수.
+                청크가 생긴 파일이 아니라 수집된 파일 전부다.
+        """
+        self.meta = {
+            "exclude_dirs": sorted(exclude_dirs or ()),
+            "file_count": file_count,
+            "indexed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
 
     def apply(self, chunks: list[Chunk], source_path: str) -> int:
         """캐시된 요약을 청크에 채워넣는다.
@@ -116,8 +169,14 @@ class Manifest:
         사람이 직접 열어 확인할 수 없기 때문이다.
         캐시 문제를 디버깅할 때 내용을 읽을 수 있어야 한다.
         """
+        payload = {
+            "version": MANIFEST_VERSION,
+            "index": self.meta,
+            "files": self.data,
+        }
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
-            json.dumps(self.data, ensure_ascii=False, indent=2),
-            encoding="utf-8"
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
