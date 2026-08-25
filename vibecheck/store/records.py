@@ -272,3 +272,71 @@ def save_answer(
 
     conn.commit()
     return answer_id
+
+def list_answers(conn: sqlite3.Connection, repo_id: int, limit: int = 20) -> list:
+    """최근 채점 기록을 시간 역순으로 가져온다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+        repo_id (int): 대상 레포 id.
+        limit (int): 가져올 최대 개수.
+
+    Returns:
+        list: answers 행 목록. 최신순.
+    """
+    return conn.execute(
+        "SELECT * FROM answers WHERE repo_id = ? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (repo_id, limit),
+    ).fetchall()
+
+
+def verdict_summary(conn: sqlite3.Connection, repo_id: int) -> dict:
+    """주장 판정을 종류별로 센다.
+
+    개별 채점 점수보다 이 누적 비율이 중요하다.
+    한 번 단정한 것은 실수지만 계속 단정하는 것은 습관이고,
+    면접에서 무너지는 것은 후자다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+        repo_id (int): 대상 레포 id.
+
+    Returns:
+        dict: (verdict, hedged) 조합별 개수. 키는 "verdict:hedged" 형식.
+    """
+    rows = conn.execute(
+        "SELECT c.verdict, c.hedged, COUNT(*) AS n "
+        "FROM claims c JOIN answers a ON c.answer_id = a.id "
+        "WHERE a.repo_id = ? "
+        "GROUP BY c.verdict, c.hedged",
+        (repo_id,),
+    ).fetchall()
+
+    return {f"{r['verdict']}:{r['hedged']}": r["n"] for r in rows}
+
+
+def repeated_assertions(conn: sqlite3.Connection, repo_id: int, limit: int = 5) -> list:
+    """근거 없이 단정한 주장을 최근 순으로 가져온다.
+
+    verdict가 unverifiable이거나 contradicted인데 유보하지 않은 것들이다.
+    사용자가 무엇을 반복해서 단정하는지 눈으로 보게 하는 것이 목적이므로
+    집계하지 않고 문장을 그대로 보여준다. 자동 분류는 주제를 잘못 묶을
+    위험이 있고, 사람은 자기 문장 몇 개만 나란히 봐도 패턴을 알아본다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+        repo_id (int): 대상 레포 id.
+        limit (int): 가져올 최대 개수.
+
+    Returns:
+        list: claim 행 목록.
+    """
+    return conn.execute(
+        "SELECT c.claim, c.verdict, a.created_at "
+        "FROM claims c JOIN answers a ON c.answer_id = a.id "
+        "WHERE a.repo_id = ? AND c.hedged = 0 "
+        "  AND c.verdict IN ('unverifiable', 'contradicted') "
+        "ORDER BY a.created_at DESC LIMIT ?",
+        (repo_id, limit),
+    ).fetchall()

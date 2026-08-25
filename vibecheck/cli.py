@@ -39,8 +39,11 @@ from vibecheck.store.records import (
     count_questions,
     get_question,
     get_repo_id,
+    list_answers,
+    repeated_assertions,
     save_answer,
     save_questions,
+    verdict_summary,
 )
 from vibecheck.store.vector import VectorStore
 
@@ -405,6 +408,73 @@ def practice(
     conn = connect(repo)
     save_answer(conn, get_repo_id(conn, repo), fb, question_id)
     conn.close()
+
+@app.command()
+def history(
+    repo: Path = typer.Argument(..., help="기록을 볼 레포 경로"),
+    limit: int = typer.Option(10, "--limit", "-l", help="표시할 답변 수"),
+) -> None:
+    """지금까지의 연습 기록과 누적 경향을 본다.
+
+    개별 점수보다 누적 비율을 위에 둔다.
+    한 번 단정한 것은 실수지만 계속 단정하는 것은 습관이고,
+    이 도구가 알려주려는 것은 후자다.
+
+    Args:
+        repo (Path): 대상 레포 루트.
+        limit (int): 표시할 답변 수.
+    """
+    repo = repo.expanduser().resolve()
+
+    conn = connect(repo)
+    repo_id = get_repo_id(conn, repo)
+
+    answers = list_answers(conn, repo_id, limit)
+    summary = verdict_summary(conn, repo_id)
+    risky = repeated_assertions(conn, repo_id)
+
+    conn.close()
+
+    if not answers:
+        typer.secho("아직 연습 기록이 없습니다.", fg=typer.colors.YELLOW)
+        typer.echo(f"연습을 시작하세요:  whyd interview {repo}")
+        raise typer.Exit(0)
+
+    typer.secho(f"\n연습 기록 ({len(answers)}건)", fg=typer.colors.CYAN, bold=True)
+    for a in answers:
+        date = a["created_at"][:10]
+        total = a["specificity"] + a["calibration"] + a["groundedness"]
+        typer.echo(f"  {date}  {total}/6  {a['question_text'][:45]}")
+
+    confirmed = summary.get("confirmed:0", 0) + summary.get("confirmed:1", 0)
+    asserted = summary.get("unverifiable:0", 0) + summary.get("contradicted:0", 0)
+    hedged = summary.get("unverifiable:1", 0) + summary.get("contradicted:1", 0)
+
+    typer.secho("\n주장 판정 누적", fg=typer.colors.CYAN, bold=True)
+    typer.secho(f"  코드로 확인됨       {confirmed}회", fg=typer.colors.GREEN)
+    typer.secho(f"  근거 없이 단정      {asserted}회", fg=typer.colors.RED)
+    typer.secho(f"  근거 없음을 밝힘    {hedged}회", fg=typer.colors.GREEN)
+
+    # 비율로 한 줄 짚어준다. 숫자만 보면 자기 경향을 알아채지 못한다.
+    unverified = asserted + hedged
+    if unverified >= 3:
+        rate = asserted / unverified
+        if rate >= 0.7:
+            typer.secho(
+                "\n코드에 근거가 없는 내용을 대부분 단정하고 있습니다. "
+                "면접에서 되물으면 무너지는 지점입니다.",
+                fg=typer.colors.RED,
+            )
+        elif rate <= 0.3:
+            typer.secho(
+                "\n확인할 수 없는 것을 밝히는 습관이 자리잡았습니다.",
+                fg=typer.colors.GREEN,
+            )
+
+    if risky:
+        typer.secho("\n근거 없이 단정한 주장", fg=typer.colors.CYAN, bold=True)
+        for r in risky:
+            typer.echo(f"  - {r['claim'][:70]}")
 
 
 def main() -> None:
