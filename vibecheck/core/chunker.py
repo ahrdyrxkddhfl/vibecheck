@@ -232,8 +232,10 @@ def to_pyproject_chunk(root: str) -> Chunk | None:
     scripts = project.get("scripts", {})
     deps = project.get("dependencies", [])
 
-    # 앞자리일수록 128 토큰 안에 남는다. 다른 어디에도 없는 사실을 먼저 둔다.
-    summary_parts = ["pyproject.toml 패키지 설정 파일"]
+    # 다른 파일 청크와 같은 모양을 지킨다. 첫 조각이 경로 라벨,
+    # 두 번째가 사람이 읽을 설명 자리다. 여기만 모양이 다르면
+    # 그 자리를 읽는 쪽이 예외를 하나 더 두어야 한다.
+    summary_parts = ["pyproject.toml 파일", "패키지 설정과 설치 정보를 담는 파일."]
 
     if scripts:
         entries = ", ".join(f"{cmd} -> {target}" for cmd, target in scripts.items())
