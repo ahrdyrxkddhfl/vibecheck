@@ -306,24 +306,38 @@ $("form").addEventListener("submit", async (e) => {
 /**
  * 파일 개요에서 사람이 읽을 한 줄을 뽑는다.
  *
- * 첫 줄(summary)은 임베딩에 실릴 키워드 나열이라 "typing, copy, pyarrow"처럼
- * 그 파일이 무엇을 하는지 알려주지 않는다. 대신 "심볼별 요약" 절의 첫 항목을
- * 쓴다. 그것이 LLM이 코드를 읽고 만든 문장이다.
+ * 모듈 독스트링이 있으면 그 첫 줄을 쓴다. 작성자가 파일 전체를 두고 쓴
+ * 문장이라 무엇을 하는 파일인지 가장 정확하게 알려준다.
  *
- * 심볼이 없는 파일(재수출용 __init__.py 등)은 요약할 것이 없으므로
- * 정의가 없다는 사실 자체를 알린다.
+ * 없으면 첫 심볼의 요약으로 대신한다. 파일 전체를 대표하지는 못하지만
+ * 아무것도 없는 것보다는 낫다. 이 경우 심볼 이름을 함께 남겨
+ * 파일 설명이 아니라 그 심볼의 설명임이 드러나게 한다.
+ *
+ * 첫 줄에서 독스트링 자리만 꺼낸다. 나머지 조각은 임베딩용 키워드
+ * 나열이라 사람이 읽을 문장이 아니다.
  */
 function oneLine(path, overview) {
   const lines = (overview || "").split("\n");
-  const at = lines.findIndex((l) => l.startsWith("  심볼별 요약:"));
 
+  // 첫 줄은 " / "로 이어붙인 조각들이고, 두 번째 자리가 모듈 독스트링의
+  // 첫 문장이다. 조립된 조각은 전부 "라벨: 값" 꼴이므로 콜론이 없으면
+  // 사람이 쓴 문장이라고 본다. 독스트링이 없으면 그 자리에
+  // "사용 라이브러리: ..."가 와서 콜론으로 걸러진다.
+  const head = (lines[0] || "").split(" / ");
+  if (head[1] && !head[1].includes(":")) {
+    return head[1].trim();
+  }
+
+  const at = lines.findIndex((l) => l.startsWith("  심볼별 요약:"));
   if (at !== -1 && lines[at + 1]) {
-    // "    execute: 설명" 에서 심볼 이름을 떼고 설명만 남긴다.
+    // "    execute: 설명" 에서 심볼 이름과 설명을 나눈다.
     const first = lines[at + 1].trim();
     const cut = first.indexOf(": ");
-    const body = cut === -1 ? first : first.slice(cut + 2);
-    const more = lines.length - at - 2;
-    return more > 0 ? body + "  +" + more : body;
+    if (cut === -1) return first;
+
+    // 독스트링이 없어 심볼 설명을 빌려 쓰는 경우다.
+    // 이름을 붙여두지 않으면 파일 전체 설명으로 오해한다.
+    return first.slice(0, cut) + "() — " + first.slice(cut + 2);
   }
 
   if ((overview || "").includes("정의된 함수·클래스 없음")) {
