@@ -9,14 +9,42 @@
 from dataclasses import asdict
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
 from vibecheck.core.collector import collect_files
 from vibecheck.core.overview import build_overview
 from vibecheck.core.quirks import find_quirks, group_quirks
+from vibecheck.llm.anthropic import AnthropicClient
 from vibecheck.services.interview import STAGE_ORDER, build_questions
+from vibecheck.services.practice import grade
+from vibecheck.store.records import connect, get_repo_id, save_answer
+from vibecheck.store.vector import VectorStore
 from vibecheck.web.deps import Index, RepoPath
 
+ANSWER_MODEL = "claude-sonnet-4-6"
+"""채점에 쓰는 모델.
+
+요약과 달리 답변을 코드와 대조하는 판단이 필요해 상위 모델을 쓴다.
+CLI와 같은 값이어야 두 경로의 채점 결과가 비교 가능하다.
+"""
+
 router = APIRouter()
+
+
+
+class PracticeRequest(BaseModel):
+    """답변 채점 요청.
+
+    빈 답변을 스키마에서 거르는 이유는 채점이 LLM 호출이기 때문이다.
+    실수로 빈 폼을 보냈을 때 요금이 나가지 않아야 한다.
+
+    Attributes:
+        question: 답변한 질문. 검색 쿼리로도 쓰인다.
+        answer: 사용자가 작성한 답변 원문.
+    """
+
+    question: str = Field(min_length=1)
+    answer: str = Field(min_length=1)
 
 
 @router.get("/overview")
@@ -131,3 +159,72 @@ def get_interview(repo: RepoPath, index: Index) -> dict:
         "total": number,
         "stale_count": stale,
     }
+
+@router.post("/practice")
+def post_practice(repo: RepoPath, index: Index, req: PracticeRequest) -> dict:
+    """답변을 코드 근거와 대조해 채점한다. LLM을 부른다.
+
+    이 라우터에서 유일하게 과금되는 자리라 POST로 둔다. 개요와 면접 질문은
+    조립이라 새로고침이 공짜지만, 채점은 사용자가 버튼을 눌러야만 나가야 한다.
+
+    채점 결과를 기록에 남긴다. 이 도구가 보여주려는 것은 개별 점수가 아니라
+    "계속 단정하는 습관"이고, 그건 기록이 쌓여야 보인다. 웹 연습이 기록에
+    빠지면 `whyd history`의 숫자가 실제 연습량과 어긋난다.
+
+    `question_id` 없이 질문 문장만 저장한다. 번호로 연결하려면 웹이
+    질문을 저장해야 하는데, `save_questions`는 기존 행을 지우고 다시 넣어
+    id가 매번 바뀐다. 화면을 새로고침했을 뿐인데 과거 기록의 참조가
+    끊기는 것보다, 연결을 포기하고 문장만 남기는 편이 안전하다.
+
+    화면에 뿌릴 것을 먼저 만들고 저장은 그 뒤에 한다. 저장이 실패해도
+    사용자는 이미 채점 결과를 받은 상태여야 한다.
+
+    Args:
+        repo: 정규화된 레포 경로.
+        index: `open_index()`의 반환값.
+        req: 질문과 답변.
+
+    Returns:
+        dict: 점수 세 축과 합계, 주장별 판정, 총평, 채점 근거.
+    """
+    chunks, chroma_dir, _stale, _meta = index
+
+    feedback = grade(
+        req.question,
+        req.answer,
+        chunks,
+        VectorStore(persist_dir=chroma_dir),
+        AnthropicClient(model=ANSWER_MODEL),
+    )
+
+    # 같은 '확인불가'라도 유보한 것은 감점 사유가 아니다.
+    # verdict와 hedged를 나눠 저장한 이유가 여기서 드러난다.
+    claims = [
+        {
+            "claim": c.claim,
+            "verdict": c.verdict,
+            "hedged": c.hedged,
+            "evidence": c.evidence,
+            "note": c.note,
+        }
+        for c in feedback.claims
+    ]
+
+    data = {
+        "question": feedback.question,
+        "specificity": feedback.specificity,
+        "calibration": feedback.calibration,
+        "groundedness": feedback.groundedness,
+        "total": feedback.total,
+        "claims": claims,
+        "risky_count": len(feedback.risky_claims),
+        "verdict_line": feedback.verdict_line,
+        "revision": feedback.revision,
+        "evidence_chunks": feedback.evidence_chunks,
+    }
+
+    conn = connect(repo)
+    save_answer(conn, get_repo_id(conn, repo), feedback)
+    conn.close()
+
+    return data
