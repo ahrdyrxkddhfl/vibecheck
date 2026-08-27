@@ -147,6 +147,49 @@ def find_package_anchor(path: Path) -> Path:
 
     return anchor
 
+def build_module_map(files: list[Path], root: str) -> dict[str, str]:
+    """모듈 이름에서 파일 경로로 가는 대응표를 만든다.
+
+    import 문에 적힌 것은 `vibecheck.core.parser` 같은 모듈 이름이지만,
+    파일 간 관계를 그리려면 `vibecheck/core/parser.py`라는 경로가 필요하다.
+    이름만으로는 어느 파일을 가리키는지 알 수 없어 화살표를 그을 수 없다.
+
+    build_module_names와 같은 계산을 하되 이름만 남기지 않고 출처를 함께
+    보관한다. 이름 집합이 필요한 쪽은 이 표의 키만 쓰면 되므로
+    계산이 두 벌로 갈라지지 않는다.
+
+    Args:
+        files (list[Path]): collect_files가 수집한 경로 목록.
+        root (str): 레포 루트 경로. 기준점이 루트를 벗어날 때의 안전망.
+
+    Returns:
+        dict[str, str]: 모듈 이름 -> 레포 루트 기준 상대 경로.
+    """
+    mapping: dict[str, str] = {}
+    root_path = Path(root).resolve()
+
+    for path in files:
+        resolved = Path(path).resolve()
+        anchor = find_package_anchor(resolved)
+
+        # 기준점이 레포 밖으로 나가면(루트 자체가 패키지인 경우) 루트로 되돌린다.
+        try:
+            rel = resolved.relative_to(anchor)
+        except ValueError:
+            rel = resolved.relative_to(root_path)
+
+        module = str(rel.with_suffix("")).replace("/", ".")
+
+        # __init__.py는 파일이 아니라 패키지 자체를 가리킨다.
+        if module.endswith(".__init__"):
+            module = module[: -len(".__init__")]
+        elif module == "__init__":
+            continue
+
+        mapping[module] = resolved.relative_to(root_path).as_posix()
+
+    return mapping
+
 
 def build_module_names(files: list[Path], root: str) -> set[str]:
     """수집된 파일들의 모듈 이름 집합을 만든다.
@@ -157,34 +200,14 @@ def build_module_names(files: list[Path], root: str) -> set[str]:
     Args:
         files (list[Path]): collect_files가 수집한 경로 목록.
         root (str): 레포 루트 경로. 기준점이 루트를 벗어날 때의 안전망으로 쓴다.
+        계산은 build_module_map에 맡기고 키만 꺼낸다.
+        같은 계산을 두 벌로 두면 한쪽만 고쳤을 때 이름 집합과 대응표가
+        어긋나는데, 그 차이는 예외 없이 조용히 진행된다.
 
     Returns:
         set[str]: 점으로 구분된 모듈 이름 집합.
     """
-    names = set()
-    root_path = Path(root).resolve()
-
-    for path in files:
-        path = Path(path).resolve()
-        anchor = find_package_anchor(path)
-
-        # 기준점이 레포 밖으로 나가면(루트 자체가 패키지인 경우) 루트로 되돌린다.
-        try:
-            rel = path.relative_to(anchor)
-        except ValueError:
-            rel = path.relative_to(root_path)
-
-        module = str(rel.with_suffix("")).replace("/", ".")
-
-        # __init__.py는 파일이 아니라 패키지 자체를 가리킨다.
-        if module.endswith(".__init__"):
-            module = module[: -len(".__init__")]
-        elif module == "__init__":
-            continue
-
-        names.add(module)
-
-    return names
+    return set(build_module_map(files, root))
 
 
 def is_internal_import(dotted: str, module_names: set[str]) -> bool:
