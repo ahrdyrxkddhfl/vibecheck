@@ -15,7 +15,12 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from vibecheck.core.collector import build_module_names, collect_files, is_internal_import
+from vibecheck.core.collector import (
+    build_module_map,
+    build_module_names,
+    collect_files,
+    is_internal_import,
+)
 from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import Chunk
@@ -106,6 +111,7 @@ class RepoOverview:
     external_deps: list[str] = field(default_factory=list)
     stdlib_deps: list[str] = field(default_factory=list)
     internal_import_count: int = 0
+    import_edges: list[tuple[str, str]] = field(default_factory=list)
     file_map: list[tuple[str, str]] = field(default_factory=list)
     entry_points: list[EntryPoint] = field(default_factory=list)
     readme: str = ""
@@ -151,6 +157,56 @@ def split_dependencies(
                 third_party.add(top)
 
     return sorted(third_party), sorted(stdlib), internal_count
+
+def build_import_edges(
+    l1: list[Chunk], module_map: dict[str, str]
+) -> list[tuple[str, str]]:
+    """파일이 파일을 가리키는 간선 목록을 만든다.
+
+    지금까지 내부 참조는 개수만 셌다. 59건이라는 숫자는 얼마나 얽혀 있는지는
+    알려주지만 어떻게 얽혀 있는지는 말해주지 않아, 관계도를 그릴 수 없었다.
+
+    L1 청크만 훑는다. 파일 하나당 하나뿐이라 출발지가 곧 그 파일이고,
+    imports에 그 파일의 import가 전부 들어 있다. L2를 쓰면 같은 import가
+    그 파일의 함수 수만큼 중복돼 간선이 부풀려진다.
+
+    상대 경로 import(from . import x)는 버린다. 점만으로는 어느 파일을
+    가리키는지 알 수 없어 도착지를 정할 수 없다. is_internal_import는
+    이것을 내부로 세지만 개수와 간선은 목적이 다르다.
+
+    자기 자신을 가리키는 간선도 버린다. 패키지 안에서 같은 이름이
+    겹칠 때 생기는데, 관계도에서 자기 자신으로 도는 화살표는 정보가 아니다.
+
+    Args:
+        l1 (list[Chunk]): 파일 단위 청크 목록.
+        module_map (dict[str, str]): 모듈 이름 -> 파일 경로 대응표.
+
+    Returns:
+        list[tuple[str, str]]: (가리키는 파일, 가리켜지는 파일) 목록.
+            중복은 제거하고 경로순으로 정렬한다.
+    """
+    edges: set[tuple[str, str]] = set()
+
+    for chunk in l1:
+        for imp in chunk.imports:
+            if imp.startswith("."):
+                continue
+
+            # 모듈 이름을 앞에서부터 잘라가며 대조한다. 수집 경로의 기준점이
+            # 실행 위치에 따라 달라져 vibecheck.core.parser로 잡힐 수도
+            # core.parser로 잡힐 수도 있다. is_internal_import와 같은 방식이다.
+            parts = imp.split(".")
+            target = None
+            for i in range(len(parts)):
+                candidate = ".".join(parts[i:])
+                if candidate in module_map:
+                    target = module_map[candidate]
+                    break
+
+            if target and target != chunk.file:
+                edges.add((chunk.file, target))
+
+    return sorted(edges)
 
 
 def find_script_entries(root: Path) -> list[EntryPoint]:
@@ -332,7 +388,8 @@ def build_overview(
     # 청크가 있는 파일만 세면 빈 __init__.py 같은 파일이 빠져,
     # whyd index가 말하는 수집 파일 수와 리포트의 규모가 어긋난다.
     files = collect_files(root, exclude_dirs)
-    module_names = build_module_names(files, root)
+    module_map = build_module_map(files, root)
+    module_names = set(module_map)
     external, stdlib, internal_count = split_dependencies(l1 or l2, module_names)
     return RepoOverview(
         root=str(root_path),
@@ -344,6 +401,7 @@ def build_overview(
         external_deps=external,
         stdlib_deps=stdlib,
         internal_import_count=internal_count,
+        import_edges=build_import_edges(l1, module_map),
         file_map=build_file_map(l1, l2),
         entry_points=find_script_entries(root_path) + find_code_entries(l2, root_path),
         readme=read_readme(root_path),

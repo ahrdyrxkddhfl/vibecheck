@@ -90,6 +90,15 @@ def get_overview(repo: RepoPath, index: Index) -> dict:
         for path, text in data.get("file_map", [])
     ]
 
+
+    # 튜플을 이름 있는 객체로 펴는 이유는 file_map과 같다.
+    # 배열의 배열로 내보내면 프론트가 위치로 접근하게 되고,
+    # 나중에 항목이 하나 늘면 조용히 어긋난다.
+    data["import_edges"] = [
+        {"from": src, "to": dst}
+        for src, dst in data.get("import_edges", [])
+    ]
+
     data["stale_count"] = stale
 
     # 언제 어떤 조건으로 인덱싱됐는지를 화면에서 보여줄 수 있어야 한다.
