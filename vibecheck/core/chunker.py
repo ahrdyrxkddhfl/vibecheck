@@ -8,6 +8,9 @@
 그대로 재사용할 수 있다.
 """
 
+import tomllib
+from pathlib import Path
+
 from vibecheck.models import Chunk, Symbol
 
 def to_chunks(
@@ -188,6 +191,75 @@ def to_file_chunk(
         end_line=total_lines,
         code=overview,
         imports=import_list,
+        summary=" / ".join(summary_parts),
+    )
+
+def to_pyproject_chunk(root: str) -> Chunk | None:
+    """pyproject.toml의 사실을 청크 하나로 조립한다.
+
+    설치하면 생기는 명령과 그 진입 함수는 이 파일에만 있다.
+    수집 대상이 .py뿐이라 이 파일은 인덱스에 들어가지 않았고,
+    그 결과 리포트는 진입점을 아는데 검색은 그 파일의 존재조차 모르는
+    상태가 됐다. 실제로 진입점을 정확히 말한 답변이 "근거 청크에 없다"는
+    이유로 확인불가 판정을 받는 것을 확인했다.
+
+    원문을 그대로 싣지 않고 조립하는 이유는 임베딩 모델의 max_seq_length가
+    128이기 때문이다. [project.scripts]는 파일 뒤쪽에 있어 원문을 그대로
+    임베딩하면 잘려나간다. 검색으로 닿아야 하는 사실일수록 summary
+    앞자리에 놓아야 한다.
+
+    imports는 비운다. 여기에 의존성을 넣으면 L1의 imports를 세는
+    split_dependencies가 함께 움직여 외부 의존성 수와 내부 참조 수가
+    바뀐다. 검색을 고치는 변경이 통계까지 흔들면 원인을 가릴 수 없다.
+
+    Args:
+        root (str): 레포 루트 경로.
+
+    Returns:
+        Chunk | None: 조립된 청크. 파일이 없거나 형식이 깨졌으면 None.
+    """
+    path = Path(root) / "pyproject.toml"
+    if not path.is_file():
+        return None
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = tomllib.loads(raw)
+    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
+        return None
+
+    project = data.get("project", {})
+    scripts = project.get("scripts", {})
+    deps = project.get("dependencies", [])
+
+    # 앞자리일수록 128 토큰 안에 남는다. 다른 어디에도 없는 사실을 먼저 둔다.
+    summary_parts = ["pyproject.toml 패키지 설정 파일"]
+
+    if scripts:
+        entries = ", ".join(f"{cmd} -> {target}" for cmd, target in scripts.items())
+        summary_parts.append(f"설치하면 생기는 명령: {entries}")
+
+    if project.get("name"):
+        summary_parts.append(f"패키지 이름: {project['name']}")
+    if project.get("version"):
+        summary_parts.append(f"버전: {project['version']}")
+    if project.get("requires-python"):
+        summary_parts.append(f"파이썬 요구 버전: {project['requires-python']}")
+    if deps:
+        summary_parts.append(f"의존성과 최소 버전: {', '.join(deps)}")
+
+    # 본문에는 원문을 싣는다. 임베딩에서는 잘리지만 LLM 컨텍스트로는
+    # 전달되므로, 검색으로 닿기만 하면 답변 단계에서 전체를 볼 수 있다.
+    lines = ["파일: pyproject.toml", "", "원문:", raw]
+
+    return Chunk(
+        file="pyproject.toml",
+        symbol="pyproject.toml",
+        kind="file",
+        start_line=1,
+        end_line=len(raw.splitlines()),
+        code="\n".join(lines),
+        imports=[],
         summary=" / ".join(summary_parts),
     )
 

@@ -6,7 +6,7 @@
 """
 
 from vibecheck.store.manifest import Manifest
-from vibecheck.core.chunker import to_chunks, to_file_chunk
+from vibecheck.core.chunker import to_chunks, to_file_chunk, to_pyproject_chunk
 from vibecheck.core.collector import collect_files, to_relative
 from vibecheck.core.summarizer import summarize_all
 from vibecheck.core.parser import (
@@ -96,6 +96,13 @@ def index_repo(
         )
         if file_chunk:
             all_chunks.append(file_chunk)
+
+    # 파이썬 파일이 아니라 루프 밖에서 한 번만 만든다.
+    # 설치하면 생기는 명령과 그 진입 함수는 이 파일에만 있어,
+    # 없으면 진입점을 정확히 말한 답변도 근거를 댈 수 없다.
+    pyproject = to_pyproject_chunk(root)
+    if pyproject:
+        all_chunks.append(pyproject)
 
     manifest.save()
 
