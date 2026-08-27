@@ -194,6 +194,59 @@ def extract_imports(root_node, source: bytes) -> list[str]:
             unique.append(name)
 
     return unique
+
+
+def extract_module_docstring(root_node, source: bytes) -> str | None:
+    """파일 맨 앞의 모듈 독스트링을 꺼낸다.
+
+    지금 파일 수준 요약은 첫 심볼의 설명을 빌려 쓰고 있어서,
+    "이 파일이 무슨 일을 하는가"가 아니라 "이 파일의 첫 함수가 무슨 일을 하는가"를
+    답하고 있다. 파일에 함수가 열 개 있으면 아홉 개는 대표되지 않는다.
+    모듈 독스트링은 작성자가 파일 전체를 두고 직접 쓴 문장이므로
+    LLM을 부르지 않고도 얻을 수 있는 가장 정확한 파일 요약이다.
+
+    첫 줄로 자르지 않고 전문을 돌려준다.
+    무엇을 검색 텍스트에 실을지는 청킹 쪽 판단이고, 파서가 미리 줄여버리면
+    나중에 L1 본문에 전문을 싣고 싶어질 때 파서를 다시 고쳐야 한다.
+
+    주석은 건너뛰되 그 뒤 첫 문장이 문자열이 아니면 포기한다.
+    파이썬에서 독스트링은 "첫 문장이 문자열일 때"만 독스트링이고,
+    인코딩 선언 주석은 문장이 아니라 독스트링 자격을 밀어내지 않는다.
+    반면 import가 먼저 나온 파일의 중간 문자열은 독스트링이 아니라 그냥 값이므로
+    파일 설명으로 오해하면 안 된다.
+
+    Args:
+        root_node: tree-sitter가 파싱한 루트 노드.
+        source (bytes): 원본 소스 바이트.
+
+    Returns:
+        str | None: 앞뒤 공백을 제거한 독스트링 본문.
+            독스트링이 없거나 내용이 비어 있으면 None.
+    """
+    for child in root_node.named_children:
+        # 주석은 문장이 아니므로 독스트링 자리를 차지하지 않는다.
+        if child.type == "comment":
+            continue
+
+        # 주석을 걷어낸 뒤 첫 문장이다. 여기서 문자열이 아니면 독스트링은 없다.
+        if child.type != "expression_statement" or not child.named_children:
+            return None
+
+        node = child.named_children[0]
+        if node.type != "string":
+            return None
+
+        # string 노드는 따옴표(string_start/end)와 알맹이(string_content)로 나뉜다.
+        # 알맹이만 꺼내야 따옴표를 직접 벗겨내는 문자열 처리를 하지 않아도 된다.
+        for part in node.children:
+            if part.type == "string_content":
+                text = source[part.start_byte : part.end_byte].decode().strip()
+                return text or None
+
+        # 알맹이가 없는 빈 문자열("""""")은 설명이 아니다.
+        return None
+
+    return None
 # ===================
 # 실행부(계속 수정 중...)
 # ===================
@@ -202,4 +255,3 @@ if __name__ == "__main__":
     for s in walk(tree.root_node, source):
         owner = f"{s.parent}." if s.parent else ""
         print(f"{s.kind:9} {owner}{s.name:12} ({s.start_line}-{s.end_line})")
-        

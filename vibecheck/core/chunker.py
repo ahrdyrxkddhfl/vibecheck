@@ -67,6 +67,7 @@ def to_file_chunk(
         total_lines: int,
         imports: list[str] | None = None,
         source_text: str = "",
+        docstring: str | None = None,
 ) -> Chunk | None:
     """한 파일의 L2 청크들을 묶어 파일 수준(L1) 청크를 만든다.
 
@@ -80,6 +81,17 @@ def to_file_chunk(
     검색 성능이 올랐을 때 L1 도입 효과인지 요약이 우연히 잘 나온 것인지 구분할 수 없다.
     또한 임베딩 검색은 문장의 매끄러움보다 키워드의 존재에 반응하므로,
     httpx라는 단어가 텍스트에 있는지가 문장이 자연스러운지보다 중요하다.
+
+    모듈 독스트링이 있으면 그것을 파일 설명의 우선 재료로 쓴다.
+    조립된 요약은 심볼 이름의 나열이라 "무엇이 들어 있는가"는 알려주지만
+    "이 파일이 왜 있는가"는 말해주지 않는다. 독스트링은 작성자가 파일 전체를
+    두고 쓴 문장이므로 LLM 호출 없이 얻을 수 있는 가장 정확한 파일 설명이다.
+
+    요약 필드에는 첫 줄만, 본문에는 전문을 싣는다.
+    요약은 임베딩에 실려 질의어와 대조되는 자리라 짧을수록 초점이 서고,
+    구글 스타일에서 첫 줄은 이미 한 문장 요약이다. 뒤따르는 배경 설명까지
+    넣으면 문장이 길어져 핵심 단어가 묽어진다. 반면 본문은 사람이 읽는
+    자리이므로 전문이 있는 편이 낫다.
 
     심볼이 하나도 없는 파일도 청크를 만든다.
     __init__.py는 정의가 없고 재수출 import만 있어 tree-sitter가 심볼을 찾지 못하는데,
@@ -95,6 +107,9 @@ def to_file_chunk(
         imports (list[str] | None): 파일의 import문 목록.
         source_text (str): 파일 원문. 심볼이 없을 때만 본문 재료로 쓴다.
             심볼이 있으면 조립된 개요가 더 압축적이므로 무시한다.
+        docstring (str | None): 모듈 독스트링 전문. 없으면 None.
+            파서가 자르지 않은 상태로 넘겨야 하며, 요약용으로 줄이는 일은
+            검색 텍스트의 길이를 정하는 이쪽 책임이다.
 
     Returns:
         Chunk | None: 파일 수준 청크.
@@ -107,6 +122,13 @@ def to_file_chunk(
         return None
 
     lines = [f"파일: {file_path}", ""]
+
+    # 설명을 심볼 목록보다 앞에 둔다. 목록은 무엇이 들어 있는지만 말하므로
+    # 무슨 파일인지 먼저 읽히게 해야 개요로서 쓸모가 있다.
+    if docstring:
+        lines.append("파일 설명:")
+        lines.append(docstring)
+        lines.append("")
 
     if import_list:
         lines.append("import 목록:")
@@ -134,6 +156,14 @@ def to_file_chunk(
     # 요약 필드에는 검색 임베딩에 실릴 핵심만 담는다.
     # 심볼 이름과 라이브러리명이 질의어와 직접 매칭되는 부분이기 때문이다.
     summary_parts = [f"{file_path} 파일"]
+
+    # 경로 라벨 바로 뒤가 실질적인 첫 내용 자리다. 라벨을 밀어내지 않는 이유는
+    # 파일명 자체가 질의어로 자주 들어와 매칭 재료로 필요하기 때문이다.
+    if docstring:
+        first_line = docstring.splitlines()[0].strip()
+        if first_line:
+            summary_parts.append(first_line)
+
     if import_list:
         summary_parts.append(f"사용 라이브러리: {', '.join(import_list)}")
     if chunks:

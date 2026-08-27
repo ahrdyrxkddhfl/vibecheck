@@ -9,7 +9,12 @@ from vibecheck.store.manifest import Manifest
 from vibecheck.core.chunker import to_chunks, to_file_chunk
 from vibecheck.core.collector import collect_files, to_relative
 from vibecheck.core.summarizer import summarize_all
-from vibecheck.core.parser import extract_imports, parse_file, walk
+from vibecheck.core.parser import (
+    extract_imports,
+    extract_module_docstring,
+    parse_file,
+    walk,
+)
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import Chunk
 
@@ -58,6 +63,7 @@ def index_repo(
     for path in files:
         tree, source = parse_file(str(path))
         symbols = walk(tree.root_node, source)
+        docstring = extract_module_docstring(tree.root_node, source)
         imports = extract_imports(tree.root_node, source)
 
         rel = to_relative(path, root)
@@ -86,6 +92,7 @@ def index_repo(
             len(text.splitlines()),
             imports,
             source_text=text,
+            docstring=docstring,
         )
         if file_chunk:
             all_chunks.append(file_chunk)
