@@ -209,8 +209,15 @@ def index(
         typer.secho("인덱싱할 코드를 찾지 못했습니다.", fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    VectorStore(persist_dir=chroma_dir).add(chunks)
+    store = VectorStore(persist_dir=chroma_dir)
+    store.add(chunks)
 
+    # 수집 대상에서 빠진 파일의 청크를 지운다. add는 upsert만 하므로
+    # 이 호출이 없으면 삭제된 파일이 인덱스에 남아 검색에 계속 잡힌다.
+    removed = store.prune([c.id for c in chunks])
+
+    if removed:
+        typer.secho(f"오래된 청크 {removed}개 삭제", fg=typer.colors.YELLOW)
     typer.secho(f"\n완료: 청크 {len(chunks)}개 -> {persist_base}", fg=typer.colors.GREEN)
     typer.echo(f'이제 질문할 수 있습니다:  whyd ask {repo} "질문 내용"')
 

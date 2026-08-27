@@ -122,6 +122,42 @@ class VectorStore:
                 for c in chunks
             ],
         )
+    def prune(self, valid_ids: list[str]) -> int:
+        """인덱싱 결과에 없는 청크를 저장소에서 지운다.
+
+        add는 upsert만 하므로 있는 것을 갱신할 뿐 사라진 것을 지우지 않는다.
+        그 결과 파일을 삭제하거나 수집 대상에서 빼도 그 파일의 청크가
+        저장소에 영구히 남아 검색 결과에 계속 잡힌다.
+        실제로 실험용 사본을 수집에서 제외한 뒤에도 답변 근거에
+        사본이 그대로 인용되는 것을 확인했다.
+
+        파일 단위가 아니라 id 차집합으로 지우는 이유는 삭제된 파일 때문이다.
+        수집 목록에서 빠진 파일은 그 파일을 기준으로 지울 기회 자체가 없다.
+        "이번 인덱싱이 만든 청크 전체"를 인덱스의 정답으로 보고
+        정답에 없는 id를 지우면 삭제와 제외를 한 번에 덮는다.
+
+        호출자는 반드시 레포 전체를 인덱싱한 결과를 넘겨야 한다.
+        일부 파일만 인덱싱한 결과를 넘기면 나머지가 전부 지워진다.
+
+        Args:
+            valid_ids (list[str]): 남겨둘 청크 id 목록.
+                레포 전체 인덱싱 결과여야 한다.
+
+        Returns:
+            int: 삭제한 청크 수.
+        """
+        # 빈 목록은 전체 삭제와 같아 사고로 이어지므로 아무것도 하지 않는다.
+        # 인덱싱이 실패해 결과가 비었을 때 인덱스까지 날리지 않기 위함이다.
+        if not valid_ids:
+            return 0
+
+        stored = set(self.collection.get(include=[])["ids"])
+        stale = list(stored - set(valid_ids))
+
+        if stale:
+            self.collection.delete(ids=stale)
+
+        return len(stale)
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
         """질의와 의미적으로 가까운 청크를 찾는다.
