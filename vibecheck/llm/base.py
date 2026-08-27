@@ -6,12 +6,12 @@
 테스트 시 가짜 구현을 주입할 수 있다는 이점도 있다.
 """
 
-from abc import ABC, abstractclassmethod
+from abc import ABC, abstractmethod
 
 class LLMClient(ABC):
     """LLM 호출의 공통 계약"""
 
-    @abstractclassmethod
+    @abstractmethod
     def complete(self, system: str, user: str, max_tokens: int = 1024) -> str:
         """프롬프트를 전달하고 응답 텍스트를 받는다.
 
