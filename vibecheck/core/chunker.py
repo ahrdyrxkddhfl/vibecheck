@@ -135,9 +135,16 @@ def to_file_chunk(
         lines.extend(f" {imp}" for imp in import_list)
         lines.append("")
 
-    if chunks:
-        lines.append(f"정의된 심볼 {len(chunks)}개:")
-        for c in chunks:
+    # 파일이 무엇을 내놓는지 보는 자리이므로 남이 부를 수 없는 함수는 뺀다.
+    # 클래스 이름 집합과 대조하는 이유는 parser가 부모가 있으면 무조건
+    # method로 찍어, 함수 안의 중첩 함수도 메서드와 같은 kind를 갖기 때문이다.
+    # 클래스와 함수 이름이 겹치면 오판하지만, 그 경우 목록에 한 줄 더 나올 뿐이라 감수한다.
+    class_names = {c.symbol for c in chunks if c.kind == "class"}
+    public = [c for c in chunks if not c.parent or c.parent in class_names]
+
+    if public:
+        lines.append(f"정의된 심볼 {len(public)}개:")
+        for c in public:
             prefix = "class " if c.kind == "class" else ""
             lines.append(f" {prefix}{c.symbol}")
         lines.append("")
@@ -166,8 +173,8 @@ def to_file_chunk(
 
     if import_list:
         summary_parts.append(f"사용 라이브러리: {', '.join(import_list)}")
-    if chunks:
-        symbol_names = ", ".join(c.symbol for c in chunks)
+    if public:
+        symbol_names = ", ".join(c.symbol for c in public)
         summary_parts.append(f"정의: {symbol_names}")
     else:
         # 정의가 없다는 사실 자체가 이 파일의 성격이다.
