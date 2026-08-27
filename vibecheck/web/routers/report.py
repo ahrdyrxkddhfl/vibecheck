@@ -10,7 +10,10 @@ from dataclasses import asdict
 
 from fastapi import APIRouter
 
+from vibecheck.core.collector import collect_files
 from vibecheck.core.overview import build_overview
+from vibecheck.core.quirks import find_quirks, group_quirks
+from vibecheck.services.interview import STAGE_ORDER, build_questions
 from vibecheck.web.deps import Index, RepoPath
 
 router = APIRouter()
@@ -66,3 +69,65 @@ def get_overview(repo: RepoPath, index: Index) -> dict:
     data["index_meta"] = meta
 
     return data
+
+@router.get("/interview")
+def get_interview(repo: RepoPath, index: Index) -> dict:
+    """면접 예상질문을 JSON으로 반환한다. LLM을 부르지 않는다.
+
+    질문 생성은 전부 조립이라 과금이 없다. 개요와 달리 GET으로 두어도
+    새로고침이 요금으로 이어지지 않으므로, 이 화면은 POST로 나눌 이유가 없다.
+
+    단계별로 묶어서 내보낸다. 면접은 개요에서 구조로, 구조에서 결정으로
+    흘러가고 연습도 그 순서를 따라야 한다. 프론트가 stage 문자열로
+    다시 묶게 하면 순서를 프론트가 정하게 되어 CLI 출력과 어긋난다.
+
+    번호는 서버에서 매긴다. 나중에 답변을 저장할 때 이 번호로 질문을
+    참조하는데, 프론트가 매기면 화면마다 다른 번호가 붙을 수 있다.
+    CLI의 `whyd practice --question-no`와 같은 번호여야 한다.
+
+    특이 지점은 디스크를 다시 읽어 계산한다. 인덱스에 담기지 않는
+    정보이고, 레포 31개 파일 기준 0.02초라 캐싱할 만한 비용이 아니다.
+
+    Args:
+        repo: 정규화된 레포 경로.
+        index: `open_index()`의 반환값.
+
+    Returns:
+        dict: `stages`(단계별 질문 묶음)와 `total`, `stale_count`.
+    """
+    chunks, _chroma_dir, stale, meta = index
+
+    excludes = set(meta.get("exclude_dirs") or ()) or None
+    overview = build_overview(str(repo), chunks, excludes)
+    quirk_groups = group_quirks(find_quirks(str(repo), collect_files(str(repo), excludes)))
+
+    questions = build_questions(overview, quirk_groups)
+
+    stages = []
+    number = 0
+
+    for stage in STAGE_ORDER:
+        staged = [q for q in questions if q.stage == stage]
+        if not staged:
+            continue
+
+        items = []
+        for question in staged:
+            number += 1
+            items.append(
+                {
+                    "no": number,
+                    "text": question.text,
+                    "answerable": question.answerable,
+                    "can_say": question.can_say,
+                    "risky": question.risky,
+                }
+            )
+
+        stages.append({"stage": stage, "questions": items})
+
+    return {
+        "stages": stages,
+        "total": number,
+        "stale_count": stale,
+    }
