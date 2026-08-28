@@ -265,6 +265,218 @@ def to_pyproject_chunk(root: str) -> Chunk | None:
         summary=" / ".join(summary_parts),
     )
 
+README_NAMES = ("README.md", "readme.md", "README.markdown", "Readme.md")
+"""README로 인정할 파일 이름.
+
+확장자 없는 README나 .rst는 넣지 않는다. 마크다운 헤딩 규칙으로 자르는
+구현이라 다른 형식은 절이 하나도 안 잡히거나 통째로 한 덩어리가 된다.
+"""
+
+
+def split_markdown_sections(raw: str) -> list[tuple[str, int, int]]:
+    """마크다운을 최상위 헤딩(#, ##) 단위로 나눈다.
+
+    코드 블록 안의 줄은 헤딩으로 보지 않는다. 설치 안내에 흔한
+    `# .env 파일에 키 입력` 같은 주석이 헤딩으로 잡히면 절이
+    엉뚱한 자리에서 끊긴다. 파이썬 주석이 #으로 시작하므로
+    파이썬 레포의 README에서는 거의 반드시 걸린다.
+
+    ###은 자르지 않는다. "사용법" 아래 명령별 소절을 각각 떼어내면
+    명령어 한 줄만 남아 어느 도구 얘기인지 알 수 없는 조각이 된다.
+    절 단위로 두면 "이 도구로 무엇을 할 수 있나"에 통째로 답이 된다.
+
+    Args:
+        raw (str): 마크다운 원문.
+
+    Returns:
+        list[tuple[str, int, int]]: (제목, 시작줄, 끝줄) 목록.
+            줄 번호는 1-based이고 끝줄을 포함한다. 내용이 빈 절은 제외된다.
+    """
+    lines = raw.splitlines()
+    in_fence = False
+    starts: list[tuple[int, str]] = []
+
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+
+        stripped = line.strip()
+        # "# "와 "## "만 받는다. "###"은 세 번째 글자가 공백이 아니라
+        # 두 조건 모두에서 걸러진다.
+        if stripped.startswith("# ") or stripped.startswith("## "):
+            starts.append((i, stripped.lstrip("#").strip()))
+
+    if not starts:
+        return [("README", 1, len(lines))] if raw.strip() else []
+
+    sections: list[tuple[str, int, int]] = []
+
+    # 첫 헤딩 앞에 글이 있으면 버리지 않는다. 배지나 한 줄 소개가
+    # 거기 있는 경우가 많고, 그것이 프로젝트 목적에 가장 가까운 문장이다.
+    if starts[0][0] > 0:
+        sections.append(("머리말", 1, starts[0][0]))
+
+    for n, (idx, title) in enumerate(starts):
+        end = starts[n + 1][0] if n + 1 < len(starts) else len(lines)
+        sections.append((title, idx + 1, end))
+
+    return [
+        s for s in sections if "\n".join(lines[s[1] - 1 : s[2]]).strip()
+    ]
+
+STATUS_MARKS = ("🚧", "⚠️", "🏗", "WIP", "Work in progress", "개발 중", "작업 중")
+"""프로젝트 상태 표시로 보는 낱말.
+
+README 첫 절 앞자리에 자주 놓이지만 "이 프로젝트가 무엇인가"의 답이 아니다.
+임베딩에 실리는 자리가 128 토큰뿐이라 이런 줄 하나가 목적 문장을 밀어낸다.
+"""
+
+
+def _is_status_line(line: str) -> bool:
+    """상태 표시만으로 이루어진 줄인지 판정한다.
+
+    짧은 줄만 대상으로 한다. 긴 문장 안에 '개발 중'이 들어 있는 경우는
+    실제 설명일 가능성이 높아 걷어내면 내용을 잃는다.
+
+    Args:
+        line (str): 기호를 걷어낸 뒤의 한 줄.
+
+    Returns:
+        bool: 상태 표시 줄이면 True.
+    """
+    if len(line) > 30:
+        return False
+    return any(mark in line for mark in STATUS_MARKS)
+
+def _section_keywords(body: str, title: str = "", limit: int = 200) -> str:
+    """절 본문에서 검색어와 맞붙을 낱말만 추려 한 줄로 만든다.
+
+    임베딩 모델의 max_seq_length가 128이라 summary에 담기는 앞자리가
+    사실상 검색 가능 범위다. 마크다운 기호와 코드 블록은 질의어와
+    매칭될 일이 없으므로 걷어내고 낱말 밀도를 높인다.
+
+    ### 소제목은 #만 떼고 남긴다. "답변 채점", "면접 예상질문" 같은
+    소제목이 그 절에서 가장 질의어에 가까운 표현인 경우가 많다.
+
+    Args:
+        body (str): 절 본문 원문.
+        title (str): 절 제목. 본문 첫 줄이 제목과 같으면 건너뛰는 데 쓴다.
+        limit (int): 결과 최대 길이.
+
+    Returns:
+        str: 공백으로 이어붙인 요약 재료.
+    """
+    in_fence = False
+    picked: list[str] = []
+
+    for line in body.splitlines():
+        s = line.strip()
+
+        if s.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not s:
+            continue
+
+        if s.startswith("#"):
+            s = s.lstrip("#").strip()
+
+        # 목록·인용·표·강조 기호를 걷어낸다. 남는 것은 낱말뿐이다.
+        s = s.lstrip("-*>+ ").replace("|", " ").replace("**", "").strip()
+        if not s or set(s) <= set("-: "):
+            continue
+
+        # 제목은 summary에 이미 따로 실려 있다. 본문 첫 줄로 다시 들어오면
+        # 128 토큰뿐인 임베딩 앞자리를 같은 낱말이 두 번 먹는다.
+        if picked == [] and s == title.strip():
+            continue
+
+        # 배지와 상태 표시를 건너뛴다. README 첫 절 앞자리를 차지하지만
+        # 프로젝트가 무엇인지와는 무관해, 정작 목적 문장을 뒤로 밀어낸다.
+        if s.startswith("![") or s.startswith("[!["):
+            continue
+        if _is_status_line(s):
+            continue
+
+        picked.append(s)
+        if sum(len(p) for p in picked) >= limit:
+            break
+
+    return " ".join(picked)[:limit]
+
+
+def to_readme_chunks(root: str) -> list[Chunk]:
+    """README를 절 단위 청크 목록으로 조립한다.
+
+    프로젝트가 무엇을 위한 것인지는 코드에 없다. 함수와 클래스를 모두
+    읽어도 "이 도구가 어떤 문제를 풀려고 만들어졌는가"는 나오지 않는다.
+    실제로 목적을 정확히 말한 답변이 근거 청크에 없다는 이유로
+    확인불가 판정을 받는 것을 확인했다. pyproject.toml 때와 같은 문제이고
+    같은 해법을 쓴다.
+
+    절마다 청크를 따로 만드는 이유는 임베딩 길이 제한이다.
+    통째로 넣으면 앞부분만 임베딩에 실려 뒤쪽 절은 검색에서 사라진다.
+    기술 스택표가 뒤에 있는 README에서는 라이브러리 질문에 닿지 못한다.
+
+    kind는 "doc"이다. "file"로 넣으면 모듈 지도에 README 절이
+    파일처럼 나열되고, L1 파일 수도 절 개수만큼 부풀려진다.
+
+    imports는 비운다. 여기에 값을 넣으면 split_dependencies가 함께
+    움직여 외부 의존성 수와 내부 참조 수가 바뀐다. 검색을 고치는 변경이
+    통계까지 흔들면 원인을 가릴 수 없다.
+
+    Args:
+        root (str): 레포 루트 경로.
+
+    Returns:
+        list[Chunk]: 절 단위 청크 목록. README가 없거나 읽을 수 없으면 빈 목록.
+    """
+    for name in README_NAMES:
+        path = Path(root) / name
+        if path.is_file():
+            break
+    else:
+        return []
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    lines = raw.splitlines()
+    chunks: list[Chunk] = []
+
+    for title, start, end in split_markdown_sections(raw):
+        body = "\n".join(lines[start - 1 : end])
+
+        # 다른 청크와 같은 모양을 지킨다. 첫 조각이 경로 라벨,
+        # 두 번째가 사람이 읽을 설명 자리다.
+        summary_parts = [f"{name} 문서", f"'{title}' 절"]
+
+        keywords = _section_keywords(body, title)
+        if keywords:
+            summary_parts.append(keywords)
+
+        code = "\n".join([f"문서: {name}", f"절: {title}", "", body])
+
+        chunks.append(
+            Chunk(
+                file=name,
+                symbol=f"{name}#{title}",
+                kind="doc",
+                start_line=start,
+                end_line=end,
+                code=code,
+                imports=[],
+                summary=" / ".join(summary_parts),
+            )
+        )
+
+    return chunks
+
 # ================
 # 실행부
 # ================

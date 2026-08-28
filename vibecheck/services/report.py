@@ -114,7 +114,9 @@ def build_report(
     Returns:
         str: 마크다운 리포트 전문.
     """
-    l2 = [c for c in chunks if c.kind != "file"]
+    # 모듈 지도는 코드 파일의 지도다. 문서 청크가 섞이면 README 절이
+    # 파일처럼 나열된다.
+    l2 = [c for c in chunks if c.kind not in ("file", "doc")]
 
     # 첫 줄과 본문을 분리해 한 줄 정의를 인용구로 강조한다.
     # 리포트를 훑는 사람이 가장 먼저 보는 문장이기 때문이다.

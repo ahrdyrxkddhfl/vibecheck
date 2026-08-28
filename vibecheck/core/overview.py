@@ -382,7 +382,9 @@ def build_overview(
     root_path = Path(root).resolve()
 
     l1 = [c for c in chunks if c.kind == "file"]
-    l2 = [c for c in chunks if c.kind != "file"]
+    # 문서 청크는 코드 심볼이 아니다. != "file"로만 거르면 README 절이
+    # 함수·클래스 수에 섞여 규모 통계가 틀어진다.
+    l2 = [c for c in chunks if c.kind not in ("file", "doc")]
 
     # 수집 결과를 두 곳에서 쓴다. 모듈 이름 집합과 파일 수 계산이다.
     # 청크가 있는 파일만 세면 빈 __init__.py 같은 파일이 빠져,
