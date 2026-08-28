@@ -27,6 +27,7 @@ from vibecheck.services.index_access import (
     IndexEmpty,
     IndexNotFound,
     index_paths,
+    load_index_meta,
     open_index,
 )
 from vibecheck.services.indexer import index_repo
@@ -197,12 +198,20 @@ def index(
 
     persist_base, chroma_dir = index_paths(repo)
 
+    # 재인덱싱할 때 --exclude를 다시 치지 않아도 되게 한다.
+    # 빠뜨리면 조건이 조용히 바뀌어 인덱스가 통째로 덮어써지고,
+    # 그 뒤의 리포트와 채점이 이전 결과와 비교 불가능해진다.
+    excludes = resolve_excludes(exclude, load_index_meta(persist_base))
+
+    if excludes and not exclude:
+        typer.echo(f"이전 제외 목록을 이어씁니다: {', '.join(sorted(excludes))}")
+
     chunks = index_repo(
         str(repo),
         AnthropicClient(model=SUMMARY_MODEL),
         verbose=True,
         persist_dir=persist_base,
-        exclude_dirs=set(exclude) if exclude else None,
+        exclude_dirs=excludes,
     )
 
     if not chunks:
@@ -273,9 +282,10 @@ def report(
     Args:
         repo (Path): 대상 레포 루트.
         output (Path): 저장할 파일 경로.
-        exclude (list[str]): 제외할 디렉토리 이름.
-            넘기지 않으면 인덱싱 때 쓴 값을 장부에서 복원하므로
-            평소에는 지정할 필요가 없다.
+        exclude (list[str]): 기본 제외 목록에 더할 디렉토리 이름.
+            장부에 함께 기록되므로 report와 interview에서는 다시 칠 필요가 없고,
+            재인덱싱 때도 생략하면 장부에 남은 값을 그대로 쓴다.
+            제외 목록을 바꾸려면 새 값을 명시해야 한다.
     """
     repo = repo.expanduser().resolve()
     chunks, _, meta = open_or_exit(repo)
