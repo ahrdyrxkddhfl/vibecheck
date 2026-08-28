@@ -119,12 +119,13 @@ def index_repo(
         total = len(all_chunks)
         l1 = sum(1 for c in all_chunks if c.kind == "file")
         docs = sum(1 for c in all_chunks if c.kind == "doc")
-        # 신규 요약 수를 세는 자리라 L2만 남겨야 한다. L1과 문서 청크는
-        # LLM 호출 없이 조립되므로 캐시 계산에 끼면 숫자가 틀린다.
-        l2 = total - l1 - docs
+        configs = sum(1 for c in all_chunks if c.kind == "config")
+        l2 = total - l1 - docs - configs
         parts = f"L2 {l2}개 + L1 {l1}개"
         if docs:
             parts += f" + 문서 {docs}개"
+        if configs:
+            parts += f" + 설정 {configs}개"
         print(f"[2/3] 청크 {total}개 생성 ({parts})")
         print(f"[3/3] 요약 완료 (캐시 재사용 {cache_hits}개 / 신규 {l2 - cache_hits}개)")
     return all_chunks

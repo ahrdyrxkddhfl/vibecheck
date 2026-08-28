@@ -257,7 +257,7 @@ def to_pyproject_chunk(root: str) -> Chunk | None:
     return Chunk(
         file="pyproject.toml",
         symbol="pyproject.toml",
-        kind="file",
+        kind="config",
         start_line=1,
         end_line=len(raw.splitlines()),
         code="\n".join(lines),

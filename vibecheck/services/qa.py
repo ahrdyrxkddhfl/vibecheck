@@ -38,6 +38,79 @@ def build_context(chunks: list[Chunk]) -> str:
         )
     return "\n\n".join(blocks)
 
+KIND_QUOTAS = [
+    (None, 4),
+    (["file"], 2),
+    (["doc"], 1),
+    (["config"], 1),
+]
+"""검색 결과에서 청크 종류별로 확보할 자리.
+
+같은 판에서 경쟁시키면 함수·클래스 청크가 전부 차지한다. 이 레포에서
+155개 중 121개가 L2라 상위 8칸에 나머지가 낄 자리가 없었다.
+
+증상은 일관됐다. "어떤 벡터 DB를 쓰나요"에 VectorStore 클래스가 1위로
+오고 정작 ChromaDB라고 적힌 문서는 오지 않는다. 개념을 물으면 그 개념을
+구현한 코드가 먼저 오고 그 개념을 설명한 글이 밀린다.
+
+pyproject.toml 청크의 kind가 file이라 설정 파일은 L1과 같은 몫을 쓴다.
+따로 떼면 몫이 하나뿐인 종류가 생기는데, 설정 파일이 없는 레포에서는
+그 자리가 통째로 낭비된다.
+
+첫 줄이 None인 것은 종류를 가리지 않는다는 뜻이다. 이 자리는 원래의
+검색 결과 그대로이고, 나머지가 그 위에 얹히는 구조다.
+"""
+
+
+def search_by_kind(
+    question: str,
+    chunks: list[Chunk],
+    store: VectorStore,
+    top_k: int,
+) -> list[Chunk]:
+    """청크 종류별로 자리를 나눠 검색한 뒤 합친다.
+
+    몫을 채우지 못한 자리는 비워두지 않고 종류를 가리지 않는 검색으로
+    메운다. 문서가 없는 레포에서 그 자리가 놀면 근거가 그만큼 줄어든다.
+
+    Args:
+        question (str): 사용자 질문.
+        chunks (list[Chunk]): 인덱싱된 전체 청크 목록.
+        store (VectorStore): 검색에 사용할 벡터 저장소.
+        top_k (int): 근거로 사용할 청크 수.
+
+    Returns:
+        list[Chunk]: 합쳐진 근거 청크 목록.
+    """
+    by_id = {c.id: c for c in chunks}
+
+    found: list[Chunk] = []
+    seen: set[str] = set()
+
+    def take(kinds: list[str] | None, limit: int) -> None:
+        """한 종류에서 limit개까지 골라 담는다."""
+        for hit in store.search(question, top_k=limit, kinds=kinds):
+            chunk = by_id.get(hit["id"])
+            if chunk is None or chunk.id in seen:
+                continue
+
+            seen.add(chunk.id)
+            found.append(chunk)
+
+            if len(found) >= top_k:
+                return
+
+    for kinds, quota in KIND_QUOTAS:
+        take(kinds, quota)
+        if len(found) >= top_k:
+            return found
+
+    # 남은 자리는 종류를 가리지 않고 채운다.
+    if len(found) < top_k:
+        take(None, top_k)
+
+    return found
+
 def answer(
     question: str,
     chunks: list[Chunk],
@@ -67,10 +140,7 @@ def answer(
             근거를 함께 반환하는 이유는 사용자가 답변의 출처를 직접 확인할 수 있어야 하기 때문이다.
             LLM답변은 검증 가능해야 한다.
     """
-    hits = store.search(question, top_k=top_k)
-
-    by_id = {c.id: c for c in chunks}
-    found = [by_id[h["id"]] for h in hits if h["id"] in by_id]
+    found = search_by_kind(question, chunks, store, top_k)
 
     if not found:
         return "관련된 코드를 찾지 못했습니다.", []

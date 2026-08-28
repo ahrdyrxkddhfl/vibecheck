@@ -159,7 +159,9 @@ class VectorStore:
 
         return len(stale)
 
-    def search(self, query: str, top_k: int = 5) -> list[dict]:
+    def search(
+        self, query: str, top_k: int = 5, kinds: list[str] | None = None
+    ) -> list[dict]:
         """질의와 의미적으로 가까운 청크를 찾는다.
 
         결과는 항상 top_k개가 반환되며, 관련성이 낮은 항목도 포함될 수 있다.
@@ -169,14 +171,22 @@ class VectorStore:
         Args:
             query (str): 자연어 질의.
             top_k (int): 반환할 최대 개수.
+            kinds (list[str] | None): 이 종류의 청크만 찾는다. None이면 전부.
+                함수·클래스 청크가 수적으로 압도해 문서와 설정 파일이
+                상위에 오르지 못하는 것을 막기 위한 것이다.
         
         Returns:
             list[dict]: id, 메타데이터, 거리를 담은 결과 목록.
                 거리가 작을수록 유사도가 높다.
         """
+        # Chroma는 조건이 하나면 $in을 그대로 받지만, 값이 하나뿐일 때도
+        # 같은 형태로 넘겨 분기를 만들지 않는다.
+        where = {"kind": {"$in": kinds}} if kinds else None
+
         result = self.collection.query(
             query_texts=[query],
             n_results=top_k,
+            where=where,
         )
 
         return [
