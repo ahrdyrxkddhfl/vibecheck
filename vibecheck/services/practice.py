@@ -5,11 +5,17 @@
 남아 있지 않기 때문이다. 따라서 채점의 기준은 내용의 정답 여부가 아니라
 검색으로 뽑은 근거 청크와 답변이 어떤 관계에 있는가이다.
 
-검색 쿼리로 질문만 사용하고 사용자 답변은 넣지 않는다.
-답변을 쿼리에 섞으면 사용자가 언급한 심볼의 청크가 걸려 사실 검증에는
-유리하지만, 답변이 틀렸을 때 검색이 그 틀린 방향으로 끌려간다.
-먼저 질문만으로 측정하고, 단정형 오답을 잡아내지 못하는 것이 확인되면
-그때 답변 기반 검색을 합집합으로 추가한다.
+질문과 답변으로 각각 검색해 합친다.
+처음에는 질문만 썼다. 답변을 쿼리에 섞으면 답변이 틀렸을 때 검색이
+그 방향으로 끌려갈 것을 우려했기 때문이다.
+
+실제로 확인한 것은 다른 문제였다. 단정형 오답은 질문만으로도 걸러졌고,
+막힌 쪽은 반대였다. 사실을 정확히 말한 답변이 그 심볼의 청크가 검색되지
+않아 확인불가 판정을 받았다. 오답을 못 잡는 것이 아니라 정답을 확인해주지
+못하는 것이 문제였다.
+
+원래 우려는 남아 있으므로 질문 몫을 절반으로 고정한다.
+답변이 무엇이든 근거의 절반은 질문 기준으로 채워진다.
 """
 
 import json
@@ -148,6 +154,66 @@ def parse_feedback(
         ],
     )
 
+def search_union(
+    question: str,
+    user_answer: str,
+    chunks: list[Chunk],
+    store: VectorStore,
+    top_k: int,
+) -> list[Chunk]:
+    """질문과 답변으로 각각 검색해 합친다.
+
+    질문만으로 검색하면 답변에 나온 심볼이 쿼리에 없어 그 청크가 걸리지
+    않는다. 사실을 정확히 말한 답변이 "근거 청크에 없다"는 이유로
+    확인불가 판정을 받는다. 실제로 tree-sitter와 프로젝트 목적에서
+    이것을 확인했다.
+
+    두 쿼리를 이어붙이지 않고 따로 검색하는 이유는 임베딩 길이 제한이다.
+    max_seq_length가 128이라 답변이 길면 질문이 통째로 밀려난다.
+
+    질문 몫을 먼저 채우고 답변 몫을 뒤에 붙인다. 답변이 틀렸을 때
+    검색이 그쪽으로 끌려가는 것이 이 방식의 위험인데, 질문 몫을 고정해두면
+    답변이 무엇이든 절반은 질문 기준으로 남는다.
+
+    전체 개수는 top_k를 넘기지 않는다. 근거 수가 늘면 같은 답변의 점수가
+    달라지는 것을 확인했으므로, 쿼리 방식만 바뀐 비교가 되려면
+    근거 수는 그대로여야 한다.
+
+    Args:
+        question (str): 채점 대상 질문.
+        user_answer (str): 사용자 답변. 검색 쿼리로도 쓴다.
+        chunks (list[Chunk]): 인덱싱된 전체 청크 목록.
+        store (VectorStore): 검색에 사용할 벡터 저장소.
+        top_k (int): 근거로 사용할 청크 수의 상한.
+
+    Returns:
+        list[Chunk]: 합쳐진 근거 청크 목록. 질문 기준 결과가 앞에 온다.
+    """
+    by_id = {c.id: c for c in chunks}
+
+    # 질문 몫을 절반으로 둔다. 홀수면 질문 쪽이 하나 더 갖는다.
+    # 채점의 기준은 어디까지나 질문이고 답변은 보조 재료다.
+    question_k = (top_k + 1) // 2
+
+    found: list[Chunk] = []
+    seen: set[str] = set()
+
+    for query, limit in ((question, question_k), (user_answer, top_k)):
+        if not query.strip():
+            continue
+
+        for hit in store.search(query, top_k=limit):
+            chunk = by_id.get(hit["id"])
+            if chunk is None or chunk.id in seen:
+                continue
+
+            seen.add(chunk.id)
+            found.append(chunk)
+
+            if len(found) >= top_k:
+                return found
+
+    return found
 
 def grade(
     question: str,
@@ -177,10 +243,7 @@ def grade(
         AnswerFeedback: 채점 결과. 근거 청크를 찾지 못하면 모든 점수가 0이고
             verdict_line에 그 사실이 담긴다.
     """
-    hits = store.search(question, top_k=top_k)
-
-    by_id = {c.id: c for c in chunks}
-    found = [by_id[h["id"]] for h in hits if h["id"] in by_id]
+    found = search_union(question, user_answer, chunks, store, top_k)
 
     if not found:
         return AnswerFeedback(
