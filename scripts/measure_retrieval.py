@@ -40,18 +40,26 @@ def run(repo: Path, top_k: int = 8) -> None:
         repo (Path): 대상 레포 루트.
         top_k (int): 검색할 청크 수.
     """
+    from vibecheck.llm.anthropic import AnthropicClient
+
     chunks, chroma_dir, _, _ = open_index(repo)
     store = VectorStore(persist_dir=chroma_dir)
     by_id = {c.id: c for c in chunks}
+    llm = AnthropicClient(model="claude-haiku-4-5")
 
     passed = 0
 
     for question, expected in CASES:
-        from vibecheck.services.qa import search_by_kind
+        from vibecheck.services.qa import (
+            CANDIDATE_MULTIPLIER,
+            rerank,
+            search_by_kind,
+        )
 
-        found = [
-            c.symbol for c in search_by_kind(question, chunks, store, top_k)
-        ]
+        candidates = search_by_kind(
+            question, chunks, store, top_k * CANDIDATE_MULTIPLIER
+        )
+        found = [c.symbol for c in rerank(question, candidates, llm, top_k)]
         # 부분 일치가 아니라 정확히 같은 심볼만 통과시킨다.
         rank = next(
             (i + 1 for i, s in enumerate(found) if s in expected), None

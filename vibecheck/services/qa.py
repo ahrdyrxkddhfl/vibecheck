@@ -6,6 +6,8 @@
 둘째, 무관한 코드가 많이 섞이면 답변 품질이 떨어진다.
 """
 
+import json
+
 from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import Chunk
@@ -111,6 +113,98 @@ def search_by_kind(
 
     return found
 
+CANDIDATE_MULTIPLIER = 3
+"""재정렬에 넘길 후보를 top_k의 몇 배로 뽑을지.
+
+임베딩은 후보를 좁히는 데까지는 성공하나 그 안에서 순서를 매기지 못한다.
+"코드를 어떻게 파싱하나요"에서 상위 셋의 거리가 0.6608, 0.6612, 0.6649로
+차이가 0.004였고, 정답인 parser.py가 3위라 잘렸다. 문서에서도 같은 일이
+있었다. 후보를 넓히면 정답이 그 안에 들어오고, 고르는 일은 LLM이 한다.
+
+3배로 두는 이유는 관찰된 정답이 모두 4위 안에 있었기 때문이다.
+더 넓히면 LLM이 읽을 목록만 길어지고 고르기가 어려워진다.
+"""
+
+
+def rerank(
+    question: str,
+    candidates: list[Chunk],
+    llm: LLMClient,
+    top_k: int,
+) -> list[Chunk]:
+    """후보 청크를 질문에 대한 유용성 순으로 다시 고른다.
+
+    임베딩이 못 하는 일을 맡는다. 벡터 검색은 주제가 비슷한 것과 답이
+    들어 있는 것을 구분하지 못한다. 진입점을 물으면 EntryPoint 클래스가
+    1위로 오는데, 그것은 진입점을 다루는 코드일 뿐 진입점이 어디인지는
+    말해주지 않는다.
+
+    청크 전문이 아니라 요약과 심볼 이름만 넘긴다. 20개 전문을 넣으면
+    프롬프트가 거대해지고, 고르는 데 필요한 것은 "이 청크에 무엇이
+    들어 있는가"이지 코드 자체가 아니다.
+
+    실패하면 원래 순서 그대로 자른다. 재정렬은 순서를 개선하는 층이고,
+    이것 때문에 질문 자체가 실패하면 잃는 것이 더 크다.
+
+    Args:
+        question (str): 사용자 질문.
+        candidates (list[Chunk]): 임베딩 검색이 뽑은 후보 목록.
+        llm (LLMClient): 재정렬에 사용할 LLM 클라이언트.
+        top_k (int): 최종적으로 남길 청크 수.
+
+    Returns:
+        list[Chunk]: 재정렬된 청크 목록. 실패하면 후보 앞에서 top_k개.
+    """
+    if len(candidates) <= top_k:
+        return candidates
+
+    lines = [
+        f"{i}. [{c.kind}] {c.symbol} — {c.summary or '요약 없음'}"
+        for i, c in enumerate(candidates, start=1)
+    ]
+    user = (
+        f"질문: {question}\n\n"
+        f"고를 개수: {top_k}\n\n"
+        f"후보:\n" + "\n".join(lines)
+    )
+
+    try:
+        raw = llm.complete(load_prompt("rerank"), user, max_tokens=300)
+        start, end = raw.find("{"), raw.rfind("}")
+        if start == -1 or end == -1:
+            return candidates[:top_k]
+
+        picked = json.loads(raw[start : end + 1]).get("selected", [])
+    except Exception:
+        return candidates[:top_k]
+
+    found: list[Chunk] = []
+    seen: set[int] = set()
+
+    for n in picked:
+        # 범위 밖 번호와 중복은 버린다. 모델이 없는 번호를 만들거나
+        # 같은 것을 두 번 고르는 경우가 있다.
+        if not isinstance(n, int) or not 1 <= n <= len(candidates):
+            continue
+        if n in seen:
+            continue
+
+        seen.add(n)
+        found.append(candidates[n - 1])
+
+        if len(found) >= top_k:
+            break
+
+    # 모델이 요청한 개수보다 적게 골랐으면 원래 순서로 채운다.
+    # 근거 수가 조건마다 달라지면 답변 품질 비교가 불가능해진다.
+    for i, chunk in enumerate(candidates, start=1):
+        if len(found) >= top_k:
+            break
+        if i not in seen:
+            found.append(chunk)
+
+    return found
+
 def answer(
     question: str,
     chunks: list[Chunk],
@@ -140,7 +234,8 @@ def answer(
             근거를 함께 반환하는 이유는 사용자가 답변의 출처를 직접 확인할 수 있어야 하기 때문이다.
             LLM답변은 검증 가능해야 한다.
     """
-    found = search_by_kind(question, chunks, store, top_k)
+    candidates = search_by_kind(question, chunks, store, top_k * CANDIDATE_MULTIPLIER)
+    found = rerank(question, candidates, llm, top_k)
 
     if not found:
         return "관련된 코드를 찾지 못했습니다.", []
