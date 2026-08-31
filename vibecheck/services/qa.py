@@ -7,6 +7,7 @@
 """
 
 import json
+import re
 
 from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
@@ -63,6 +64,107 @@ pyproject.toml 청크의 kind가 file이라 설정 파일은 L1과 같은 몫을
 검색 결과 그대로이고, 나머지가 그 위에 얹히는 구조다.
 """
 
+def is_identifier_query(question: str) -> bool:
+    """질의가 식별자 하나로만 되어 있는지 판정한다.
+
+    문자열 경로를 모든 질의에 붙이면 자연어 질의가 망가진다.
+    "요약을 캐시할 때 왜 해시를 쓰나요?"에 문자열 매칭이 끼면
+    '해시'가 든 무관한 청크가 앞자리를 먹어 지금 3등인 답을 밀어낸다.
+    그래서 문자열 경로는 벡터가 실제로 못 하는 질의에만 연다.
+
+    밑줄이나 대소문자 혼용을 요구하는 이유는 평범한 영단어를 걸러내기
+    위해서다. "authentication"은 공백 없는 아스키지만 식별자가 아니라
+    자연어 질의이고, 벡터가 처리해야 할 몫이다.
+
+    이 조건이면 "prune" 같은 순수 소문자 이름은 걸러진다. 의도한
+    것이다. 식별자가 섞인 자연어 질의는 지금도 2등으로 닿으므로
+    고칠 대상이 아니다.
+
+    Args:
+        question (str): 사용자 질의.
+
+    Returns:
+        bool: 식별자 질의로 볼 수 있으면 True.
+    """
+    q = question.strip()
+
+    if len(q) < 2 or not all(c.isalnum() and c.isascii() or c == "_" for c in q):
+        return False
+
+    return "_" in q or (q.lower() != q and q.upper() != q)
+
+IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+"""질의에서 낱말 하나를 떼어내는 무늬.
+
+파이썬 이름 규칙과 같다. 숫자로 시작하지 않고 글자·숫자·밑줄로 이어진다.
+"""
+
+
+def extract_identifiers(question: str) -> list[str]:
+    """질의 안에 섞인 식별자를 뽑는다.
+
+    질의 전체가 식별자일 때만 문자열 경로를 열면 실제 사용을 놓친다.
+    "child_by_field_name 어디서 써?"는 공백이 있어 식별자 질의가
+    아니지만, 벡터로 검색하면 사용처 세 곳 중 하나만 걸린다.
+    quirks.py의 collect_used_names, function_params처럼 이름만 닮은
+    것이 근거 여덟 자리 중 넷을 먹기 때문이다.
+
+    is_identifier_query와 같은 조건을 낱말 하나하나에 적용한다.
+    밑줄이나 대소문자 혼용을 요구하므로 "어디서"나 "authentication"
+    같은 평범한 낱말은 걸리지 않는다.
+
+    Args:
+        question (str): 사용자 질의.
+
+    Returns:
+        list[str]: 식별자로 볼 수 있는 낱말 목록. 등장 순서를 지킨다.
+    """
+    found = []
+
+    for token in IDENTIFIER_PATTERN.findall(question):
+        if len(token) < 2 or token in found:
+            continue
+
+        if "_" in token or (token.lower() != token and token.upper() != token):
+            found.append(token)
+
+    return found
+
+def search_by_identifier(
+    question: str, chunks: list[Chunk], limit: int = 3
+) -> list[Chunk]:
+    """코드 원문에 그 문자열이 있는 청크를 등장 횟수 순으로 찾는다.
+
+    등장 횟수로 정렬하는 이유는 언급과 사용을 가르기 위해서다.
+    독스트링에 이름만 적어둔 자리는 대개 한 번 나오고, 실제로 부르는
+    코드는 여러 번 나오거나 최소한 같은 횟수다. 정렬 없이 순회 순서로
+    집으면 벡터 검색이 저지른 실수를 그대로 반복한다. 측정에서 실제
+    사용처(18등)보다 독스트링 언급(4등)이 앞선 그 일이다.
+
+    summary를 보지 않고 code만 보는 이유도 같다. "이 함수는 X를 쓴다"는
+    요약문이 걸리면 다시 언급이 사용을 이긴다.
+
+    Args:
+        question (str): 식별자 질의.
+        chunks (list[Chunk]): 인덱싱된 전체 청크 목록.
+        limit (int): 반환할 최대 개수. 종류별 몫을 지나치게 밀어내지
+            않도록 상한을 둔다.
+
+    Returns:
+        list[Chunk]: 등장 횟수가 많은 순의 청크 목록.
+    """
+    # 파일 청크는 파일 전체를 담아 등장 횟수가 구조적으로 높다.
+    # 함수 청크와 같은 자로 재면 흔한 이름일수록 앞자리를 독식한다.
+    # top_k로 재보니 파일 청크 둘이 1·2등을 먹고 정의부가 5등으로 밀렸다.
+    # 파일 청크는 벡터 경로로도 잡히므로 여기서는 뺀다.
+    scored = [
+        (c.code.count(question), c) for c in chunks if c.kind != "file"
+    ]
+    hits = [(n, c) for n, c in scored if n > 0]
+    hits.sort(key=lambda pair: pair[0], reverse=True)
+
+    return [c for _, c in hits[:limit]]
+
 
 def search_by_kind(
     question: str,
@@ -88,6 +190,21 @@ def search_by_kind(
 
     found: list[Chunk] = []
     seen: set[str] = set()
+
+    # 식별자는 벡터가 받아내지 못한다. 코드 원문에 그 이름이 있는데도
+    # 19등, 130등으로 밀려 재정렬 후보에도 들지 못하는 것을 측정했다.
+    # 문자열로 찾은 것을 앞자리에 먼저 담아 후보에 확실히 올린다.
+    #
+    # 질의 전체가 식별자일 때만 열면 실제 사용을 놓친다.
+    # "child_by_field_name 어디서 써?"로 물으면 사용처 셋 중 하나만
+    # 걸려 답변이 "한 번 사용됩니다"로 나왔다. 낱말 단위로 뽑는다.
+    for identifier in extract_identifiers(question):
+        for chunk in search_by_identifier(identifier, chunks):
+            if chunk.id in seen:
+                continue
+
+            seen.add(chunk.id)
+            found.append(chunk)
 
     def take(kinds: list[str] | None, limit: int) -> None:
         """한 종류에서 limit개까지 골라 담는다."""
