@@ -157,8 +157,13 @@ def search_by_identifier(
     # 함수 청크와 같은 자로 재면 흔한 이름일수록 앞자리를 독식한다.
     # top_k로 재보니 파일 청크 둘이 1·2등을 먹고 정의부가 5등으로 밀렸다.
     # 파일 청크는 벡터 경로로도 잡히므로 여기서는 뺀다.
+    # 낱말 경계를 요구한다. 부분 문자열로 세면 짧은 이름이 긴 이름 안에
+    # 걸려 엉뚱한 쪽이 이긴다. ctxd에서 "Client"로 찾으면 AsyncClient
+    # 코드에도 걸리는데, 짧은 이름일수록 빽빽하게 나와 client.py가
+    # 여섯 자리 중 여섯을 먹고 AsyncClient 클래스 청크가 밀려났다.
+    pattern = re.compile(rf"\b{re.escape(question)}\b")
     scored = [
-        (c.code.count(question), c) for c in chunks if c.kind != "file"
+        (len(pattern.findall(c.code)), c) for c in chunks if c.kind != "file"
     ]
     hits = [(n, c) for n, c in scored if n > 0]
     hits.sort(key=lambda pair: pair[0], reverse=True)
