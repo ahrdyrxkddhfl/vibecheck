@@ -85,6 +85,23 @@ CASES_V2 = [
 통과로 치면 그 실패가 보이지 않는다.
 """
 
+CASES_V3 = [
+    ("child_by_field_name", "any", {"walk", "extract_imports.scan"}),
+    ("콘솔 스크립트 진입점", "any", {"main"}),
+    ("prune은 언제 호출되나요?", "any", {"VectorStore.prune"}),
+    ("요약을 캐시할 때 왜 해시를 쓰나요?", "any", {"Manifest.apply"}),
+]
+"""식별자 검색용 시험지.
+
+앞의 셋은 식별자나 식별자가 섞인 질의다. 넷째는 대조군으로 v2에서
+이미 통과하는 순수 자연어 질문이며, 하이브리드 검색이 자연어 경로를
+망가뜨리지 않는지 보기 위해 넣었다.
+
+통과 여부가 아니라 순위를 기록한다. 식별자 질의는 벡터 검색에서
+69등까지 밀리므로 재정렬 후보에도 들지 못한다. 통과/실패만 보면
+0에서 0으로 남아 고쳐도 나아졌는지 알 수 없다.
+"""
+
 REJECT_CASES = [
     "spring AI를 적용한 이유가 뭐예요?",
     "advisor 호출 흐름을 설명해 보세요.",
@@ -149,6 +166,51 @@ def run(repo: Path, cases: list, label: str, top_k: int = 8) -> None:
 
     print(f"\n{passed}/{len(cases)} 통과 (top_k={top_k})")
 
+def run_raw(repo: Path, cases: list, label: str, depth: int = 200) -> None:
+    """재정렬 이전, 벡터 검색만으로 기대 청크가 몇 등인지 찍는다.
+
+    run()과 달리 통과 여부가 아니라 순위를 남긴다. 식별자 질의는
+    상위권에 아예 오지 못해 통과/실패로는 0과 0의 비교가 되고,
+    고친 뒤에도 나아졌는지 말할 수 없기 때문이다.
+
+    재정렬을 거치지 않는 이유는 두 가지다. 후보에 들지 못한 청크는
+    재정렬이 구제할 수 없어 벡터 단계의 순위가 문제의 실제 위치다.
+    또한 LLM을 부르지 않아 여러 번 돌려도 비용과 변동이 없다.
+
+    Args:
+        repo (Path): 대상 레포 루트.
+        cases (list): (질의, 방식, 기대 심볼 집합) 목록. 방식은 쓰지 않는다.
+        label (str): 출력에 표시할 시험지 이름.
+        depth (int): 순위를 찾아볼 깊이. 전체 청크 수보다 크면 전부 훑는다.
+    """
+    _, chroma_dir, _, _ = open_index(repo)
+    store = VectorStore(persist_dir=chroma_dir)
+
+    print(f"\n=== {label} (재정렬 전 벡터 순위, depth={depth})")
+
+    for query, _mode, expected in cases:
+        found = store.search(query, top_k=depth)
+        ranks = {}
+
+        # 심볼명은 파일이 다르면 겹칠 수 있어 먼저 나온 것만 남긴다.
+        # 이 레포에서는 기대 심볼이 모두 유일해 문제가 없지만,
+        # 다른 레포에 쓰면 동명의 다른 함수를 정답으로 찍을 수 있다.
+        for i, hit in enumerate(found, start=1):
+            if hit["symbol"] in expected and hit["symbol"] not in ranks:
+                ranks[hit["symbol"]] = (i, hit["distance"])
+
+        print(f"\n--- {query}")
+
+        if found:
+            print(f"    1등: {found[0]['symbol']} ({found[0]['distance']:.4f})")
+
+        for symbol in sorted(expected):
+            if symbol in ranks:
+                rank, dist = ranks[symbol]
+                print(f"    {symbol}: {rank}등 ({dist:.4f})")
+            else:
+                print(f"    {symbol}: {depth}등 밖")
+
 
 def show_rejects(repo: Path, top_k: int = 8) -> None:
     """답이 없는 질문에 무엇을 돌려주는지 보여준다.
@@ -181,6 +243,8 @@ if __name__ == "__main__":
 
     if "--v1" in sys.argv:
         run(target, CASES_V1, "v1 (동결)")
+    elif "--v3" in sys.argv:
+        run_raw(target, CASES_V3, "v3 (식별자)")
     elif "--reject" in sys.argv:
         show_rejects(target)
     else:
