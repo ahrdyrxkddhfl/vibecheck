@@ -209,6 +209,13 @@
 
   .meta { font-size: 0.82rem; color: var(--muted); margin-top: 2.5rem; }
   [hidden] { display: none !important; }
+
+  .rel { margin: 8px 0 4px; font-size: 13px; }
+  .rel-head { color: var(--muted); margin: 8px 0 4px; }
+  .rel-row { display: flex; gap: 8px; padding: 2px 0 2px 12px; }
+  .rel-dir { color: var(--muted); flex: 0 0 88px; font-family: ui-monospace, monospace; }
+  .rel-names { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .rel-name { font-family: ui-monospace, monospace; }
 </style>
 <script type="module">
   // 관계도는 노드와 화살표를 직접 배치해야 하는데, 그 계산이 코드의
@@ -465,6 +472,63 @@ function groupByDir(files) {
   return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 }
 
+/**
+ * 파일 하나에 붙은 관계를 폴더별로 묶어 보여준다.
+ *
+ * 폴더 단위 관계도는 화살표에 "6"이라고만 적혀 어느 파일이 어느 파일을
+ * 가리키는 6인지 알 수 없었다. 파일 단위로 전부 그리면 30개 파일에
+ * 66개 화살표가 얽혀 더 못 읽는다. 한 파일만 두고 양쪽을 세우면
+ * 가장 많은 것이 12개라 목록으로 읽힌다.
+ *
+ * 폴더로 묶는 이유는 열두 줄이 평평하게 나열되면 어느 계층과 얽혀
+ * 있는지가 안 보이기 때문이다. core와 services와 store가 각각
+ * 몇 개인지가 그 파일의 자리를 말해준다.
+ *
+ * 그림 대신 목록인 이유는 열 개 남짓한 화살표를 그려도 배치가 제멋대로라
+ * 읽는 데 도움이 되지 않기 때문이다. 방향은 글자로 적으면 헷갈리지 않는다.
+ *
+ * @param {string} path - 대상 파일 경로.
+ * @param {Array<{from: string, to: string}>} edges - 파일 간 참조 전체.
+ * @returns {HTMLElement|null} 관계 목록. 양쪽 다 없으면 null.
+ */
+function relations(path, edges) {
+  const uses = [];
+  const usedBy = [];
+
+  for (const e of edges || []) {
+    if (e.from === path) uses.push(e.to);
+    if (e.to === path) usedBy.push(e.from);
+  }
+
+  if (!uses.length && !usedBy.length) return null;
+
+  const wrap = el("div", "rel");
+
+  const section = (label, items) => {
+    if (!items.length) return;
+
+    wrap.append(el("div", "rel-head", label + " (" + items.length + ")"));
+
+    for (const [dir, names] of groupByDir(items.map((p) => ({ path: p })))) {
+      const row = el("div", "rel-row");
+      row.append(el("span", "rel-dir", dir ? dir + "/" : "/"));
+
+      const list = el("span", "rel-names");
+      for (const f of names.sort((a, b) => a.name.localeCompare(b.name))) {
+        list.append(el("span", "rel-name", f.name));
+      }
+
+      row.append(list);
+      wrap.append(row);
+    }
+  };
+
+  section("← 이 파일이 쓰이는 곳", usedBy);
+  section("→ 이 파일이 쓰는 곳", uses);
+
+  return wrap;
+}
+
 function render(d) {
   document.title = d.name + " — VibeCheck";
 
@@ -529,6 +593,9 @@ function render(d) {
         el("span", "fnote", oneLine(f.path, f.overview))
       );
       box.append(head, el("pre", null, detailBody(f.overview)));
+
+      const rel = relations(f.path, d.import_edges);
+      if (rel) box.append(rel);
       nodes.push(box);
     }
   }
