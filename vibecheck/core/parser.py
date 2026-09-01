@@ -45,6 +45,7 @@ def walk(
     source: bytes,
     parent: str | None = None,
     results: list[Symbol] | None = None,
+    parent_is_class: bool = False,
 ) -> list[Symbol]:
     """문법 트리를 재귀 순회하며 심볼을 수집한다.
 
@@ -56,12 +57,24 @@ def walk(
     class_definition 노드를 만나면 그 이름을 하위 노드에 전달하므로,
     메서드는 자신이 어느 클래스에 속하는지 알 수 있다.
 
+    부모의 종류를 이름과 따로 물려주는 이유는 이름만으로는 클래스인지
+    함수인지 알 수 없기 때문이다. 부모가 있기만 하면 메서드로 보던
+    때는 함수 안의 지역 함수가 전부 메서드로 잡혔다. 이 레포에서
+    method 24개 중 6개가 그것이었다. 검색은 kind를 몫으로 쓰지 않아
+    영향이 없었으나, 컨텍스트에 "(method)"로 실려 모델이 클래스
+    메서드로 읽는다.
+
+    이름은 그대로 물려준다. 지역 함수도 어느 함수 안에 사는지가
+    유용한 정보이고, extract_imports.scan 같은 표기가 이미 검색
+    시험지의 기대값이다.
+
     Args:
         node (Node): 현재 순회 중인 노드.
         source (bytes): 원본 소스. 노드 이름을 꺼낼 때 사용한다.
-        parent (str | None): 상위 클래스 이름. 최상단이면 None.
+        parent (str | None): 상위 심볼 이름. 최상단이면 None.
         results (list[Symbol] | None): 수집 결과 누적 리스트.
             재귀 호출 간 공유되며, 최초 호출 시 None이면 새로 생성한다.
+        parent_is_class (bool): 상위 심볼이 클래스인지 여부.
 
     Returns:
         list[Symbol]: 파일 내 모든 함수·클래스 심볼. 소스 등장 순서를 따른다.
@@ -73,6 +86,7 @@ def walk(
     # class -> block -> function 구조에서 중간의 block 노드가
     # 부모 정보를 끊어먹지 않도록 하기 위함이다.
     next_parent = parent
+    next_is_class = parent_is_class
 
     if node.type in TARGET_TYPES:
         name_node = node.child_by_field_name("name")
@@ -80,7 +94,7 @@ def walk(
 
         if node.type == "class_definition":
             kind = "class"
-        elif parent is not None:
+        elif parent_is_class:
             kind = "method"
         else:
             kind = "function"
@@ -100,9 +114,10 @@ def walk(
 
         # 이 노드 자신이 심볼일 때만 자식에게 새 부모를 물려준다.
         next_parent = name
+        next_is_class = node.type == "class_definition"
 
     for child in node.children:
-        walk(child, source, next_parent, results)
+        walk(child, source, next_parent, results, next_is_class)
 
     return results
 
