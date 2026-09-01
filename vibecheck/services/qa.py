@@ -211,6 +211,13 @@ def search_by_kind(
             seen.add(chunk.id)
             found.append(chunk)
 
+            # take와 같은 상한을 둔다. 식별자 하나당 셋이므로 여럿이
+            # 섞인 질의에서 top_k를 넘길 수 있다. 실제로는 식별자들이
+            # 같은 자리를 가리켜 중복 제거에 걸리므로 넘치는 일이
+            # 드물지만, 함수가 약속한 수를 지키게 해둔다.
+            if len(found) >= top_k:
+                return found
+
     def take(kinds: list[str] | None, limit: int) -> None:
         """한 종류에서 limit개까지 골라 담는다."""
         for hit in store.search(question, top_k=limit, kinds=kinds):
