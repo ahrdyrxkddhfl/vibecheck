@@ -327,7 +327,29 @@ $("form").addEventListener("submit", (e) => {
   e.preventDefault();
   const path = $("path").value.trim();
   if (!path) return;
+
+  // 주소에 남겨야 새로고침해도 보던 레포가 유지된다.
+  // 값을 화면에만 두면 새로고침 한 번에 빈 화면으로 돌아간다.
+  // localStorage가 아니라 주소를 쓰는 이유는 API가 이미 ?path=를
+  // 쓰고 있고, 주소를 그대로 넘겨주면 같은 화면이 열리기 때문이다.
+  history.replaceState(null, "", "?path=" + encodeURIComponent(path));
   analyze(path);
+});
+
+// 주소에 경로가 있으면 열자마자 복원한다.
+//
+// load에서 하는 이유는 관계도가 CDN에서 받아오는 mermaid를 쓰기
+// 때문이다. 스크립트가 파싱되는 시점에 부르면 mermaid가 아직
+// 도착하지 않아 관계도만 "그리지 못했습니다"로 뜬다.
+// load는 모듈 스크립트를 기다린다.
+//
+// 두 API 모두 LLM을 부르지 않으므로 다시 받는 데 요금이 들지 않는다.
+window.addEventListener("load", () => {
+  const saved = new URLSearchParams(location.search).get("path");
+  if (!saved) return;
+
+  $("path").value = saved;
+  analyze(saved);
 });
 
 /**
