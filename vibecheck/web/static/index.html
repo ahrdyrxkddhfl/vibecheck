@@ -523,8 +523,8 @@ function relations(path, edges) {
     }
   };
 
-  section("← 이 파일이 쓰이는 곳", usedBy);
-  section("→ 이 파일이 쓰는 곳", uses);
+  section("← 이 파일은 어디서 쓰이나?", usedBy);
+  section("→ 이 파일은 무엇을 필요로 하나?", uses);
 
   return wrap;
 }
