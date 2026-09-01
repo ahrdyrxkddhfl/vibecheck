@@ -282,6 +282,41 @@ for (const tab of document.querySelectorAll(".tab")) {
   });
 }
 
+
+/**
+ * 응답에서 몸통을 꺼낸다. 실패면 읽을 수 있는 오류를 던진다.
+ *
+ * .json()을 먼저 부르면 안 된다. 예상하지 못한 500에서는 서버가
+ * JSON이 아니라 HTML 오류 화면을 보내므로 파싱이 먼저 터지고,
+ * 준비해둔 안내 대신 "Unexpected token" 같은 문구가 화면에 뜬다.
+ * 실제로 그렇게 떴다.
+ *
+ * 상태를 먼저 보고, 몸통은 읽어보되 실패해도 넘어간다.
+ * deps가 만드는 400·404·409는 detail이 있는 JSON이라 그대로 쓰고,
+ * 그렇지 않으면 상태 번호만이라도 알려준다.
+ *
+ * @param {Response} res - fetch 응답.
+ * @returns {Promise<object>} 파싱된 몸통.
+ */
+async function body(res) {
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    // JSON이 아닌 응답이다. 아래에서 상태 번호로 안내한다.
+  }
+
+  if (!res.ok) {
+    throw new Error((data && data.detail) || "요청 실패 (" + res.status + ")");
+  }
+
+  if (data === null) {
+    throw new Error("응답을 읽지 못했습니다 (" + res.status + ")");
+  }
+
+  return data;
+}
+
 /**
  * 경로 하나로 두 API를 받아 세 화면을 채운다.
  *
@@ -302,15 +337,8 @@ async function analyze(path) {
       fetch("/api/interview" + query),
     ]);
 
-    const overview = await overviewRes.json();
-    if (!overviewRes.ok) {
-      throw new Error(overview.detail || "요청 실패 (" + overviewRes.status + ")");
-    }
-
-    const interview = await interviewRes.json();
-    if (!interviewRes.ok) {
-      throw new Error(interview.detail || "요청 실패 (" + interviewRes.status + ")");
-    }
+    const overview = await body(overviewRes);
+    const interview = await body(interviewRes);
 
     render(overview);
     renderInterview(interview, path);
