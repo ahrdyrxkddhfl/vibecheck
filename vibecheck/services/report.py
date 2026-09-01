@@ -23,15 +23,22 @@ FOLD_THRESHOLD = 5
 """
 
 ENTRY_FOLD_THRESHOLD = 4
-"""추정 진입점을 접어둘 기준 개수.
+"""확정 진입점이 있을 때 추정을 접는 기준 개수.
 
-확정 진입점이 있을 때만 접는다.
-pyproject.toml에 등록된 것이 있다는 것은 "이 프로젝트는 어디서 시작하는가"가
-이미 답해졌다는 뜻이고, 나머지는 참고 사항이다.
+pyproject.toml에 등록된 것이 있다는 것은 "이 프로젝트는 어디서
+시작하는가"가 이미 답해졌다는 뜻이고, 나머지는 참고 사항이다.
 실제로 확정 1개가 추정 19개에 묻혀 읽히지 않는 일이 있었다.
+"""
 
-확정이 없으면 접지 않는다. 그때는 추정이 유일한 단서이므로
-접어두면 답을 감추는 셈이 된다.
+ENTRY_FOLD_THRESHOLD_NO_CONFIRMED = 8
+"""확정 진입점이 없을 때 추정을 접는 기준 개수.
+
+확정이 없으면 추정이 유일한 단서이므로 여유를 둔다. 다섯쯤은
+펼쳐두는 편이 읽기 쉽다.
+
+다만 개수를 아예 안 보면 벽이 된다. scripts 아래 실행 파일이
+열셋인 레포에서 화면이 목록으로 가득 찼다. "전부 진입점이다"는
+"아무것도 진입점이 아니다"와 읽는 사람에게 같은 뜻이 된다.
 """
 
 
@@ -171,6 +178,12 @@ def build_report(
     if not overview.entry_points:
         lines.append("진입점을 찾지 못했습니다. 라이브러리로만 쓰이는 코드일 수 있습니다.")
     else:
+        if not confirmed:
+            lines.append(
+                "pyproject.toml에 등록된 명령이 없습니다. "
+                "아래는 파일 이름과 코드 관례로 추정한 것입니다."
+            )
+            lines.append("")
         for entry in confirmed:
             lines.append(f"- **확정** `{entry.target}` — {entry.evidence}")
 
@@ -179,7 +192,11 @@ def build_report(
         ]
 
         # 확정이 있고 추정이 많을 때만 접는다.
-        if confirmed and len(guessed) > ENTRY_FOLD_THRESHOLD:
+        limit = (
+            ENTRY_FOLD_THRESHOLD if confirmed
+            else ENTRY_FOLD_THRESHOLD_NO_CONFIRMED
+        )
+        if len(guessed) > limit:
             lines += [
                 "",
                 f"<details><summary>직접 실행 가능한 파일 {len(guessed)}개</summary>",
