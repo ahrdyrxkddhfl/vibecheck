@@ -104,9 +104,11 @@ def load_chunks(repo: Path, persist_dir: str) -> tuple[list[Chunk], int]:
     Returns:
         tuple[list[Chunk], int]: (복원된 청크 목록, 건너뛴 청크 수).
     """
-    import chromadb
+    # 클라이언트를 직접 만들지 않는다. Chroma의 등록부가 스레드 안전하지
+    # 않아 웹에서 두 API를 동시에 부르면 양쪽이 다 죽는다.
+    from vibecheck.store.vector import get_client
 
-    col = chromadb.PersistentClient(path=persist_dir).get_collection("chunks")
+    col = get_client(persist_dir).get_collection("chunks")
     got = col.get()
 
     chunks = []

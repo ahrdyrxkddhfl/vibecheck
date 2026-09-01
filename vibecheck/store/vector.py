@@ -6,6 +6,7 @@
 텍스트를 의미 공간의 벡터로 변환하면 표현이 달라도 의미가 가까운 항목을 찾을 수 있다.
 """
 
+import threading
 from pathlib import Path
 
 import chromadb
@@ -14,6 +15,44 @@ from chromadb.utils import embedding_functions
 from vibecheck.models import Chunk
 
 COLLECTION_NAME = "chunks"
+_CLIENTS: dict[str, "chromadb.ClientAPI"] = {}
+"""경로별로 하나씩 두는 Chroma 클라이언트."""
+
+_CLIENTS_LOCK = threading.Lock()
+"""클라이언트를 만들 때 채우는 자물쇠."""
+
+
+def get_client(persist_dir: str) -> "chromadb.ClientAPI":
+    """경로에 해당하는 Chroma 클라이언트를 돌려준다. 없으면 만든다.
+
+    PersistentClient를 매번 새로 만들면 안 된다. Chroma는 경로를 키로
+    시스템을 공유하는 클래스 단위 등록부를 들고 있는데 스레드 안전하지
+    않다. 한쪽이 만드는 도중 다른 쪽이 "이미 있다"고 보고 정리 코드를
+    돌려 상대의 것을 꺼버린다.
+
+    실제로 웹에서 두 API를 동시에 부르면 양쪽이 다 죽었다. 한쪽은
+    KeyError, 다른 쪽은 bindings 속성이 사라졌다는 오류였다.
+    스레드 둘로 open_index를 동시에 부르면 그대로 재현된다.
+
+    만드는 구간만 자물쇠로 막는다. 이미 있는 것을 꺼내 쓰는 것은
+    막을 필요가 없고, 막으면 검색이 줄을 서게 된다.
+
+    Args:
+        persist_dir (str): 벡터 저장소 디렉토리.
+
+    Returns:
+        chromadb.ClientAPI: 그 경로의 클라이언트. 같은 경로면 같은 것이다.
+    """
+    client = _CLIENTS.get(persist_dir)
+    if client is not None:
+        return client
+
+    with _CLIENTS_LOCK:
+        # 자물쇠를 기다리는 사이 다른 스레드가 만들었을 수 있다.
+        if persist_dir not in _CLIENTS:
+            _CLIENTS[persist_dir] = chromadb.PersistentClient(path=persist_dir)
+
+    return _CLIENTS[persist_dir]
 
 EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 """임베딩 모델 이름.
@@ -77,7 +116,7 @@ class VectorStore:
             persist_dir (str): 인덱스를 저장할 디렉토리 경로.
         """
         Path(persist_dir).mkdir(parents=True, exist_ok=True)
-        self.client = chromadb.PersistentClient(path=persist_dir)
+        self.client = get_client(persist_dir)
         self.collection = self.client.get_or_create_collection(
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"},

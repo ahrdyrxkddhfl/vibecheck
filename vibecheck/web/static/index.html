@@ -282,11 +282,15 @@ for (const tab of document.querySelectorAll(".tab")) {
   });
 }
 
-$("form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const path = $("path").value.trim();
-  if (!path) return;
-
+/**
+ * 경로 하나로 두 API를 받아 세 화면을 채운다.
+ *
+ * 제출과 새로고침 복원이 같은 일을 하므로 함수로 뺀다.
+ * 두 곳이 따로 자라면 한쪽만 고치는 일이 생긴다.
+ *
+ * @param {string} path - 대상 레포 경로.
+ */
+async function analyze(path) {
   $("go").disabled = true;
   $("msg").textContent = "분석하는 중...";
   $("result").hidden = true;
@@ -317,6 +321,13 @@ $("form").addEventListener("submit", async (e) => {
   } finally {
     $("go").disabled = false;
   }
+}
+
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const path = $("path").value.trim();
+  if (!path) return;
+  analyze(path);
 });
 
 /**
