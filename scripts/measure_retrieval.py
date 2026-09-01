@@ -87,7 +87,11 @@ CASES_V2 = [
 
 CASES_V3 = [
     ("child_by_field_name", "any", {"walk", "extract_imports.scan"}),
-    ("콘솔 스크립트 진입점", "any", {"main"}),
+    (
+        "이 프로젝트는 어디서부터 실행되나요?",
+        "any",
+        {"pyproject.toml", "find_script_entries", "EntryPoint"},
+    ),
     ("prune은 언제 호출되나요?", "any", {"VectorStore.prune"}),
     ("요약을 캐시할 때 왜 해시를 쓰나요?", "any", {"Manifest.apply"}),
 ]
@@ -100,6 +104,11 @@ CASES_V3 = [
 통과 여부가 아니라 순위를 기록한다. 식별자 질의는 벡터 검색에서
 69등까지 밀리므로 재정렬 후보에도 들지 못한다. 통과/실패만 보면
 0에서 0으로 남아 고쳐도 나아졌는지 알 수 없다.
+
+2번은 원래 `콘솔 스크립트 진입점`으로 `main`을 기대했다.
+독스트링에서 떼어낸 인공 질의였고 `main` 본문이 app() 한 줄이라
+실제로 답에 쓰이지 않는다. 실제 면접 질문으로 바꾸고 답변이
+실제로 쓴 근거를 기대로 삼았다.
 """
 
 REJECT_CASES = [
