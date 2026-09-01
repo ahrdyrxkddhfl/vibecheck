@@ -162,6 +162,35 @@ class Manifest:
             "chunks": {c.id: c.summary for c in chunks if c.summary},
         }
 
+    def prune(self, kept: set[str]) -> list[str]:
+        """이번 인덱싱에서 수집되지 않은 파일의 캐시를 지운다.
+
+        update는 처리한 파일만 덮어쓰고 save는 data를 통째로 쓴다.
+        지우는 자리가 없어 한 번 들어온 항목은 제외 대상이 되어도
+        영구히 남는다. 실제로 기본 제외 목록에 넣은 뒤 여러 번
+        재인덱싱한 디렉토리가 그대로 남아 있었다.
+
+        기준을 update를 탄 파일이 아니라 수집된 파일로 잡는 이유는
+        요약이 실패하거나 건너뛴 파일의 멀쩡한 캐시를 날리지 않기
+        위해서다. 수집 목록에 있으면 이번에도 인덱싱 대상이다.
+
+        VectorStore.prune과 같은 이름을 쓴다. 청크와 장부는 짝을
+        이루므로 같은 일에 같은 이름이 붙어 있어야 한다.
+
+        Args:
+            kept (set[str]): 이번에 수집한 파일의 상대 경로 집합.
+                장부 키와 같은 형태여야 한다.
+
+        Returns:
+            list[str]: 지운 항목의 경로 목록.
+        """
+        gone = [key for key in self.data if key not in kept]
+
+        for key in gone:
+            del self.data[key]
+
+        return gone
+
     def save(self) -> None:
         """장부를 디스크에 기록한다.
 

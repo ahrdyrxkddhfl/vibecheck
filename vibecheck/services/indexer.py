@@ -113,6 +113,11 @@ def index_repo(
     # 답변도 근거를 댈 수 없어 확인불가가 된다.
     all_chunks.extend(to_readme_chunks(root))
 
+    # 제외 대상이 된 파일의 캐시가 장부에 영구히 남는 것을 막는다.
+    # update는 처리한 파일만 덮어쓰므로 지우는 자리가 여기밖에 없다.
+    # README·pyproject 청크는 update를 타지 않아 장부에 항목이 없다.
+    manifest.prune({to_relative(p, root) for p in files})
+
     manifest.save()
 
     if verbose:
