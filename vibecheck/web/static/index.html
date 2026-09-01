@@ -79,7 +79,7 @@
     letter-spacing: 0.02em;
   }
   .dir::before { content: "📁 "; }
-  .dir:first-child { margin-top: 0; }
+  .dirbox:first-child > .dir { margin-top: 0; }
 
   details { border-bottom: 1px solid var(--line); }
   details summary {
@@ -216,6 +216,12 @@
   .rel-dir { color: var(--muted); flex: 0 0 88px; font-family: ui-monospace, monospace; }
   .rel-names { display: flex; flex-wrap: wrap; gap: 4px 12px; }
   .rel-name { font-family: ui-monospace, monospace; }
+
+  .dirbox > summary { cursor: pointer; list-style: none; }
+  .dirbox > summary::-webkit-details-marker { display: none; }
+  .dirbox[open] > summary::before { content: "📂 "; }
+  .dircount { color: var(--muted); font-size: 13px; font-weight: normal; }
+
 </style>
 <script type="module">
   // 관계도는 노드와 화살표를 직접 배치해야 하는데, 그 계산이 코드의
@@ -591,7 +597,21 @@ function render(d) {
 
   const nodes = [];
   for (const [dir, items] of groupByDir(d.file_map)) {
-    nodes.push(el("div", "dir", dir || "/"));
+    // 폴더도 접을 수 있게 details로 감싼다. 파일이 열 몇 개인 폴더가
+    // 펼쳐져 있으면 다른 폴더가 화면 밖으로 밀려 구조가 안 보인다.
+    //
+    // open으로 두어 펼친 채 시작한다. 접힌 채로 열면 폴더 이름
+    // 두세 줄만 뜨는 화면이 되어 처음 보는 사람이 무엇을 볼지 모른다.
+    const group = el("details", "dirbox");
+    group.open = true;
+
+    const dirHead = el("summary", "dir");
+    dirHead.append(
+      el("span", null, dir || "/"),
+      el("span", "dircount", " (" + items.length + ")")
+    );
+    group.append(dirHead);
+
     for (const f of items) {
       const box = el("details");
       const head = el("summary");
@@ -603,8 +623,10 @@ function render(d) {
 
       const rel = relations(f.path, d.import_edges);
       if (rel) box.append(rel);
-      nodes.push(box);
+      group.append(box);
     }
+
+    nodes.push(group);
   }
   $("files").replaceChildren(...nodes);
 
