@@ -45,6 +45,14 @@
   .stat b { display: block; font-size: 1.6rem; font-weight: 600; letter-spacing: -0.02em; }
   .stat span { font-size: 0.8rem; color: var(--muted); }
 
+/* 규모 숫자 바로 아래에 붙는다. 위의 숫자가 레포 전체가 아니라
+   파이썬 파일만 센 것이라는 사실은 숫자와 떨어지면 읽히지 않는다. */
+  #scope {
+    margin-top: 0.75rem; font-size: 0.82rem; color: var(--muted);
+    line-height: 1.6;
+  }
+  #scope:empty { display: none; }
+
   .tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .tag {
     padding: 0.2rem 0.55rem; border: 1px solid var(--line);
@@ -257,6 +265,7 @@
     <div id="panel-overview">
       <h2>규모</h2>
       <div class="stats" id="stats"></div>
+      <div id="scope"></div>
 
       <h2>외부 의존성</h2>
       <div class="tags" id="deps"></div>
@@ -555,6 +564,20 @@ function render(d) {
     box.append(el("b", null, value), el("span", null, label));
     return box;
   }));
+
+  // 분석하지 못한 파일을 숫자 바로 아래에 밝힌다. 파이썬만 읽는 도구가
+  // 자바 레포를 받아도 개요는 완성된 것처럼 나오는데, 화면에 그렇게 뜨면
+  // 사용자는 레포 전체가 분석된 줄 알고 결과를 신뢰한다.
+  const scope = [];
+  if (d.skipped_note) {
+    scope.push(el("div", null, d.skipped_note + ". 파이썬 파일만 분석합니다."));
+  }
+  // 크기 초과는 종류가 다른 누락이다. 사용자가 분석되리라 믿는
+  // 파이썬 파일이 빠진 것이라 개수가 아니라 이름을 밝힌다.
+  (d.skipped_large || []).forEach((p) => {
+    scope.push(el("div", null, "크기 상한을 넘겨 제외: " + p));
+  });
+  $("scope").replaceChildren(...scope);
 
   const deps = d.external_deps.length
     ? d.external_deps.map((x) => el("span", "tag", x))

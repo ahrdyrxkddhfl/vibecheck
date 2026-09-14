@@ -18,8 +18,11 @@ from pathlib import Path
 from vibecheck.core.collector import (
     build_module_map,
     build_module_names,
-    collect_files,
+    collect_source_files,
+    format_skipped,
+    group_by_extension,
     is_internal_import,
+    to_relative,
 )
 from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
@@ -86,7 +89,7 @@ class RepoOverview:
         root (str): 레포 루트 경로.
         name (str): 레포 이름.
         file_count (int): 수집된 파일 수.
-            청크가 생긴 파일이 아니라 collect_files가 수집한 파일 전부다.
+            청크가 생긴 파일이 아니라 collect_source_files가 수집한 파일 전부다.
             심볼도 import도 없는 빈 파일은 청크를 만들지 않지만
             레포의 파일인 것은 맞으므로 규모에서 빼지 않는다.
         total_lines (int): 총 줄 수.
@@ -100,6 +103,13 @@ class RepoOverview:
             키워드만 담고 있어 심볼별 설명이 빠져 있다.
         entry_points (list[EntryPoint]): 진입점 후보 목록.
         readme (str): README 본문. 없으면 빈 문자열.
+        skipped_note (str): 분석하지 못한 파일을 알리는 한 줄. 없으면 빈 문자열.
+            개수 목록이 아니라 완성된 문장을 담는 이유는 CLI와 웹이
+            같은 문장을 말하게 하기 위해서다. 양쪽이 각자 조립하면
+            한쪽만 고쳤을 때 같은 레포가 화면마다 다른 숫자를 말한다.
+        skipped_large (list[str]): 크기 상한을 넘겨 빠진 파일의 상대 경로.
+            확장자가 대상이 아닌 파일과 종류가 다르다. 사용자가 분석되리라
+            믿는 파이썬 파일이 빠진 것이라 개수가 아니라 이름을 밝힌다.
     """
 
     root: str
@@ -115,6 +125,8 @@ class RepoOverview:
     file_map: list[tuple[str, str]] = field(default_factory=list)
     entry_points: list[EntryPoint] = field(default_factory=list)
     readme: str = ""
+    skipped_note: str = ""
+    skipped_large: list[str] = field(default_factory=list)
 
 
 
@@ -306,9 +318,13 @@ def find_code_entries(chunks: list[Chunk], root: Path) -> list[EntryPoint]:
 
     return sorted(found.values(), key=rank)
 
-
 def read_readme(root: Path) -> str:
     """레포 루트의 README 본문을 읽는다.
+
+    glob("README*")로 찾지 않는다. 대소문자를 구분하지 않는 파일시스템에서도
+    glob은 패턴 매칭이라 대소문자를 구분해 readme.md를 놓친다.
+    소문자 README를 쓰는 레포에서 "이 프로젝트가 무엇인가"의 답이 담긴
+    유일한 재료가 요약 프롬프트에서 통째로 빠지고, 화면은 README가 없다고 말한다.
 
     Args:
         root (Path): 레포 루트.
@@ -316,12 +332,18 @@ def read_readme(root: Path) -> str:
     Returns:
         str: README 본문. 없으면 빈 문자열.
     """
-    for path in sorted(root.glob("README*")):
-        if path.is_file():
-            try:
-                return path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return ""
+
+    for path in entries:
+        if not path.name.lower().startswith("readme") or not path.is_file():
+            continue
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
     return ""
 
 def build_file_map(l1: list[Chunk], l2: list[Chunk]) -> list[tuple[str, str]]:
@@ -369,6 +391,13 @@ def build_overview(
 ) -> RepoOverview:
     """인덱싱된 청크로부터 레포 개요를 조립한다.
 
+    분석하지 못한 파일도 함께 담는다. 파이썬만 읽는 도구가 자바로 된 레포를
+    받으면 소수의 파일만 보고도 개요가 완성된 것처럼 나오는데,
+    화면에 그렇게 뜨면 사용자는 레포 전체가 분석된 줄 알고 결과를 신뢰한다.
+    인덱싱 시점에 저장해두지 않고 여기서 다시 세는 이유는, 인덱싱 이후에
+    파일이 늘어나도 화면이 현재 상태를 말하게 하기 위해서다.
+    어차피 모듈 이름 집합을 만들려고 순회하므로 추가 비용도 없다.
+
     Args:
         root (str): 레포 루트 경로.
         chunks (list[Chunk]): 인덱싱된 청크 목록. L1과 L2가 섞여 있어도 된다.
@@ -386,13 +415,20 @@ def build_overview(
     # 함수·클래스 수에 섞여 규모 통계가 틀어진다.
     l2 = [c for c in chunks if c.kind not in ("file", "doc", "config")]
 
-    # 수집 결과를 두 곳에서 쓴다. 모듈 이름 집합과 파일 수 계산이다.
+    # 수집 결과를 세 곳에서 쓴다. 모듈 이름 집합, 파일 수, 제외 보고다.
     # 청크가 있는 파일만 세면 빈 __init__.py 같은 파일이 빠져,
     # whyd index가 말하는 수집 파일 수와 리포트의 규모가 어긋난다.
-    files = collect_files(root, exclude_dirs)
+    collected = collect_source_files(root, exclude_dirs)
+    files = collected.files
     module_map = build_module_map(files, root)
     module_names = set(module_map)
     external, stdlib, internal_count = split_dependencies(l1 or l2, module_names)
+
+    # 청크가 생긴 파일을 그대로 쓴다. README나 pyproject는 수집 대상이 아니면서
+    # 별도 경로로 인덱싱되므로, 이름을 직접 적으면 README.rst 같은 변형에서 틀린다.
+    indexed = {c.file for c in chunks}
+    skipped = group_by_extension(collected.skipped_other, root, indexed)
+
     return RepoOverview(
         root=str(root_path),
         name=root_path.name,
@@ -407,6 +443,8 @@ def build_overview(
         file_map=build_file_map(l1, l2),
         entry_points=find_script_entries(root_path) + find_code_entries(l2, root_path),
         readme=read_readme(root_path),
+        skipped_note=format_skipped(skipped),
+        skipped_large=[to_relative(p, root) for p in collected.skipped_by_size],
     )
 
 
@@ -417,6 +455,11 @@ def build_overview_prompt(overview: RepoOverview) -> str:
     파일 지도를 재료의 중심에 둔다.
     개별 함수 요약까지 넣으면 재료가 수십 배로 늘어나는데,
     "이 프로젝트가 무엇인가"에 답하는 데는 파일 단위 역할이면 충분하다.
+
+    제외 내역은 넣지 않는다. 요약이 답해야 할 것은 "이 프로젝트가 무엇인가"이고,
+    분석 범위는 그 답의 재료가 아니라 화면에서 따로 밝힐 사실이다.
+    재료에 섞으면 모델이 "자바 부분은 알 수 없다" 같은 유보를 요약문에 끼워 넣어
+    정작 물어본 것에 대한 답이 흐려진다.
 
     Args:
         overview (RepoOverview): 조립된 개요.

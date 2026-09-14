@@ -434,12 +434,20 @@ def to_readme_chunks(root: str) -> list[Chunk]:
     Returns:
         list[Chunk]: 절 단위 청크 목록. README가 없거나 읽을 수 없으면 빈 목록.
     """
-    for name in README_NAMES:
-        path = Path(root) / name
-        if path.is_file():
+    # 후보 이름으로 경로를 조립해 is_file()로 확인하면, 대소문자를 구분하지 않는
+    # 파일시스템에서 readme.md가 README.md로 열린다. 청크에는 디스크에 없는
+    # 이름이 박히고, 대소문자를 구분하는 리눅스에서 같은 코드를 돌리면
+    # 같은 파일을 아예 찾지 못한다. macOS에서만 보이지 않는 차이다.
+    # 디렉터리를 훑어 실제 이름을 얻되, 후보 목록의 우선순위는 유지한다.
+    actual = {p.name.lower(): p for p in Path(root).iterdir() if p.is_file()}
+    for candidate in README_NAMES:
+        path = actual.get(candidate.lower())
+        if path is not None:
             break
     else:
         return []
+
+    name = path.name
 
     try:
         raw = path.read_text(encoding="utf-8")

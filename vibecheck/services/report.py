@@ -153,11 +153,17 @@ def build_report(
         f"| 함수·클래스 | {overview.symbol_count}개 |",
         f"| 파일 간 참조 | {overview.internal_import_count}건 |",
         "",
-        "---",
-        "",
-        "## 3. 외부 의존성",
-        "",
     ]
+
+    # 분석 범위를 규모 바로 뒤에 밝힌다. 위의 숫자가 레포 전체가 아니라
+    # 파이썬 파일만 센 것이라는 사실은 숫자와 떨어지면 읽히지 않는다.
+    if overview.skipped_note:
+        lines += [f"{overview.skipped_note}. 파이썬 파일만 분석합니다.", ""]
+    for path in overview.skipped_large:
+        lines += [f"크기 상한을 넘겨 제외: `{path}`", ""]
+
+    lines += ["---", "", "## 3. 외부 의존성", ""]
+    
 
     if overview.external_deps:
         lines.append("이 프로젝트가 선택해서 가져온 라이브러리입니다.")

@@ -5,6 +5,7 @@
 가상환경이나 의존성 폴더가 걸러지지 않으면 수천 개의 무관한 파일이 파싱과 LLM 요약까지 흘러가 시간과 비용을 낭비한다.
 """
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 EXTENSIONS = {".py"}
@@ -51,8 +52,40 @@ MAX_FILE_SIZE = 500 * 1024
 파싱과 요약 비용은 크므로 제외한다.
 """
 
-def collect_files(root: str, exclude_dirs: set[str] | None = None) -> list[Path]:
-    """레포에서 인덱싱 대상 파일 목록을 수집한다.
+
+@dataclass
+class CollectResult:
+    """수집된 파일과 수집 과정에서 버려진 것을 함께 담는다.
+
+    목록만 돌려주면 호출자는 무엇이 빠졌는지 알 방법이 없고,
+    파이썬이 아닌 파일로 이루어진 레포에서도 인덱싱이 성공한 것처럼 끝난다.
+    부분 결과를 완전한 결과로 보이게 하는 것은 사용자를 적극적으로 오도하므로,
+    버린 것을 세어 함께 돌려준다.
+
+    제외 디렉토리(.venv, node_modules 등)는 세지 않는다.
+    진입 자체를 막아 비용을 아끼는 것이 목적이고,
+    의존성 폴더의 수천 개를 보고하면 정작 봐야 할 소수의 항목이 묻힌다.
+    사용자가 자기 코드라고 믿었는데 빠진 것만 보고 대상이다.
+
+    Attributes:
+        files (list[Path]): 인덱싱 대상으로 선별된 파일 경로.
+        skipped_other (list[Path]): 확장자가 대상이 아니어서 제외된 파일.
+            개수만 세면 뺄셈이 불가능하다. README나 pyproject처럼
+            수집 대상이 아니면서 다른 경로로 인덱싱되는 파일이 있어,
+            보고 단계에서 골라내려면 경로가 남아 있어야 한다.
+        skipped_by_size (list[Path]): 크기 상한을 넘겨 제외된 파일.
+            개수가 적고 사용자가 이름을 보면 납득하는 종류라 경로를 그대로 보관한다.
+    """
+
+    files: list[Path]
+    skipped_other: list[Path] = field(default_factory=list)
+    skipped_by_size: list[Path] = field(default_factory=list)
+
+
+def collect_source_files(
+    root: str, exclude_dirs: set[str] | None = None
+) -> CollectResult:
+    """레포에서 인덱싱 대상 파일을 수집하고 버린 것을 함께 보고한다.
 
     디렉토리를 재귀 순회하되, 제외 대상 디렉토리는 하위까지 통째로 건너뛴다.
     순회 후 필터링하지 않고 진입 자체를 막는 이유는 node_modules처럼
@@ -71,8 +104,9 @@ def collect_files(root: str, exclude_dirs: set[str] | None = None) -> list[Path]
             독스트링이 없는 레포일수록 검색에 도움이 되기 때문이다.
 
     Returns:
-        list[Path]: 수집된 파일 경로 목록. 경로순으로 정렬되어
-                    실행할 때마다 동일한 순서를 보장한다.
+        CollectResult: 수집 결과. files는 경로순으로 정렬되어
+                       실행할 때마다 동일한 순서를 보장한다.
+
     Raises:
         ValueError: 경로가 존재하지 않거나 디렉토리가 아닐 때.
     """
@@ -85,7 +119,9 @@ def collect_files(root: str, exclude_dirs: set[str] | None = None) -> list[Path]
     # 대상 레포가 테스트를 한곳에 모아두는 관례를 따를 때만 완전히 걸러진다.
     excluded = EXCLUDE_DIRS | set(exclude_dirs or ())
 
-    results = []
+    results: list[Path] = []
+    skipped_other: list[Path] = []
+    skipped_size: list[Path] = []
 
     def scan(directory: Path) -> None:
         """디렉토리를 재귀 순회하며 조건에 맞는 파일을 수집한다.
@@ -102,9 +138,40 @@ def collect_files(root: str, exclude_dirs: set[str] | None = None) -> list[Path]
             elif entry.suffix in EXTENSIONS:
                 if entry.stat().st_size <= MAX_FILE_SIZE:
                     results.append(entry)
+                else:
+                    skipped_size.append(entry)
+            else:
+                skipped_other.append(entry)
 
     scan(root_path)
-    return sorted(results)
+
+    return CollectResult(
+        files=sorted(results),
+        skipped_other=sorted(skipped_other),
+        skipped_by_size=sorted(skipped_size),
+    )
+
+
+def collect_files(root: str, exclude_dirs: set[str] | None = None) -> list[Path]:
+    """레포에서 인덱싱 대상 파일 목록을 수집한다.
+
+    수집 규칙은 collect_source_files에 있고 여기서는 목록만 꺼낸다.
+    제외 내역이 필요 없는 호출자가 대부분이라 기존 형태를 유지하되,
+    같은 순회를 두 벌로 두지는 않는다. 규칙이 갈라지면 한쪽만 고쳤을 때
+    수집 결과와 보고 내용이 어긋나고, 그 차이는 조용히 진행된다.
+
+    Args:
+        root (str): 레포 루트 경로.
+        exclude_dirs (set[str] | None): 기본 제외 목록에 더할 디렉토리 이름.
+
+    Returns:
+        list[Path]: 수집된 파일 경로 목록. 경로순으로 정렬되어 있다.
+
+    Raises:
+        ValueError: 경로가 존재하지 않거나 디렉토리가 아닐 때.
+    """
+    return collect_source_files(root, exclude_dirs).files
+
 
 def to_relative(path: Path, root: str) -> str:
     """절대 경로를 레포 루트 기준 상대 경로 문자여롤 변환한다.
@@ -121,6 +188,75 @@ def to_relative(path: Path, root: str) -> str:
         str: 슬래시로 구분된 상대 경로 문자열.
     """
     return path.relative_to(Path(root)).as_posix()
+
+
+def group_by_extension(
+    paths: list[Path], root: str, indexed: set[str] | None = None
+) -> dict[str, int]:
+    """제외된 파일을 확장자별 개수로 묶는다.
+
+    indexed를 받는 이유는 수집 대상이 아닌 것과 인덱스에 없는 것이 다르기 때문이다.
+    README와 pyproject.toml은 확장자 필터에 걸려 여기까지 오지만
+    별도 경로로 청크가 되어 실제로는 검색된다.
+    이것을 제외됐다고 보고하면 조용한 누락을 고치려다 거짓 보고를 만드는 셈이 된다.
+
+    Args:
+        paths (list[Path]): 제외된 파일 경로 목록.
+        root (str): 레포 루트 경로. 상대 경로 대조에 쓴다.
+        indexed (set[str] | None): 다른 경로로 인덱싱된 파일의 상대 경로 집합.
+            보고에서 빼되 수집 결과는 건드리지 않는다.
+
+    Returns:
+        dict[str, int]: 확장자 -> 개수. 개수 내림차순, 같으면 이름순으로
+                        정렬되어 표시 계층이 그대로 앞에서부터 자를 수 있다.
+                        확장자가 없는 파일은 빈 문자열 키로 묶인다.
+    """
+    handled = indexed or set()
+    counts: dict[str, int] = {}
+
+    for path in paths:
+        if to_relative(path, root) in handled:
+            continue
+        counts[path.suffix] = counts.get(path.suffix, 0) + 1
+
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def format_skipped(counts: dict[str, int], top: int = 5) -> str:
+    """확장자별 제외 개수를 한 줄 문장으로 만든다.
+
+    상위 몇 개만 보이고 나머지를 접는다.
+    실제 레포에서 28종이 한 줄로 쏟아졌고, 사용자가 봐야 할 .java가
+    빌드 산출물인 .class 뒤에 묻혔다.
+    진입점과 모듈 지도에서 이미 같은 기준으로 접고 있다.
+
+    CLI와 웹이 같은 문장을 쓰도록 여기에 둔다.
+    양쪽이 따로 조립하면 한쪽만 고쳤을 때 같은 레포가 다른 숫자를 말하게 된다.
+
+    Args:
+        counts (dict[str, int]): group_by_extension의 결과. 정렬을 가정한다.
+        top (int): 그대로 나열할 확장자 종류 수.
+
+    Returns:
+        str: 표시 문장. counts가 비었으면 빈 문자열.
+    """
+    if not counts:
+        return ""
+
+    items = list(counts.items())
+    shown = items[:top]
+    rest = items[top:]
+
+    detail = ", ".join(f"{ext or '(확장자 없음)'} {n}" for ext, n in shown)
+    # 한 종류만 남으면 접는 쪽이 더 길고 정보는 적다.
+    if len(rest) == 1:
+        ext, n = rest[0]
+        detail += f", {ext or '(확장자 없음)'} {n}"
+    elif rest:
+        detail += f", 그 외 {len(rest)}종 {sum(n for _, n in rest)}개"
+
+    return f"제외 {sum(counts.values())}개: {detail}"
+
 
 def find_package_anchor(path: Path) -> Path:
     """모듈 이름의 기준점이 되는 디렉토리를 찾는다.
@@ -146,6 +282,7 @@ def find_package_anchor(path: Path) -> Path:
         anchor = anchor.parent
 
     return anchor
+
 
 def build_module_map(files: list[Path], root: str) -> dict[str, str]:
     """모듈 이름에서 파일 경로로 가는 대응표를 만든다.
@@ -237,12 +374,20 @@ def is_internal_import(dotted: str, module_names: set[str]) -> bool:
             return True
     return False
 
+
 if __name__ == "__main__":
     import sys
 
     target = sys.argv[1] if len(sys.argv) > 1 else "."
-    files = collect_files(target)
+    result = collect_source_files(target)
 
-    for f in files:
+    for f in result.files:
         print(to_relative(f, target))
-    print(f"\n총 {len(files)}개 파일")
+    print(f"\n총 {len(result.files)}개 파일")
+
+    skipped = group_by_extension(result.skipped_other, target)
+    if skipped:
+        print(format_skipped(skipped))
+
+    for path in result.skipped_by_size:
+        print(f"크기 초과 제외: {to_relative(path, target)}")

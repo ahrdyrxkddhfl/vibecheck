@@ -12,7 +12,12 @@ from vibecheck.core.chunker import (
     to_pyproject_chunk,
     to_readme_chunks,
 )
-from vibecheck.core.collector import collect_files, to_relative
+from vibecheck.core.collector import (
+    collect_source_files,
+    format_skipped,
+    group_by_extension,
+    to_relative,
+)
 from vibecheck.core.summarizer import summarize_all
 from vibecheck.core.parser import (
     extract_imports,
@@ -36,6 +41,14 @@ def index_repo(
     파일이 변경되지 않았다면 저장된 요약을 재사용해 LLM 호출을 건너뛴다.
     인덱싱 비용의 대부분이 요약 호출이므로, 반복 인덱싱에서 이 절감이 크다.
 
+    수집에서 빠진 파일은 마지막에 확장자별로 보고한다.
+    파이썬이 아닌 파일로 이루어진 레포에서도 인덱싱이 성공한 것처럼 끝나면
+    사용자는 레포 전체가 분석된 줄 알고 결과를 신뢰한다.
+    보고 시점이 수집 직후가 아니라 마지막인 이유는, 무엇이 빠졌는지 말하려면
+    무엇이 들어갔는지가 먼저 확정되어야 하기 때문이다.
+    README와 pyproject.toml은 수집 대상이 아니면서 별도 경로로 청크가 되므로,
+    청크가 다 만들어진 뒤에야 제외 목록에서 뺄 수 있다.
+
     Args:
         root (str): 레포 루트 경로.
         llm (LLMClient): 요약에 사용할 LLM 클라이언트.
@@ -45,16 +58,17 @@ def index_repo(
         persist_dir (str): 캐시 장부를 저장할 디렉토리.
             벡터 인덱스와 짝을 이루므로 같은 위치를 지정해야 한다. 
         exclude_dirs (set[str] | None): 기본 제외 목록에 더할 디렉토리 이름.
-            collect_files로 그대로 전달된다. 실험에서 테스트를 채점용 정답지로 쓸 때
-            인덱스에서 빼는 용도이며, 평소에는 넘기지 않는다.
+            collect_source_files로 그대로 전달된다. 실험에서 테스트를 채점용
+            정답지로 쓸 때 인덱스에서 빼는 용도이며, 평소에는 넘기지 않는다.
+
     Returns:
-        Returns:
-            list[Chunk]: 요약이 채워진 청크 목록.
-                함수·클래스 단위 청크(L2)와 파일 단위 개요 청크(L1)가 섞여 있다.
-                L1은 함수 단위로는 담기지 않는 import 정보와 심볼 목록을
-                검색 대상으로 만들기 위한 것으로, LLM 호출 없이 조립된다.
+        list[Chunk]: 요약이 채워진 청크 목록.
+            함수·클래스 단위 청크(L2)와 파일 단위 개요 청크(L1)가 섞여 있다.
+            L1은 함수 단위로는 담기지 않는 import 정보와 심볼 목록을
+            검색 대상으로 만들기 위한 것으로, LLM 호출 없이 조립된다.
     """
-    files = collect_files(root, exclude_dirs)
+    collected = collect_source_files(root, exclude_dirs)
+    files = collected.files
     if verbose:
         print(f"[1/3] 파일 {len(files)}개 수집")
 
@@ -133,6 +147,21 @@ def index_repo(
             parts += f" + 설정 {configs}개"
         print(f"[2/3] 청크 {total}개 생성 ({parts})")
         print(f"[3/3] 요약 완료 (캐시 재사용 {cache_hits}개 / 신규 {l2 - cache_hits}개)")
+
+        # 청크가 생긴 파일을 그대로 쓴다. README나 pyproject의 이름을
+        # 직접 적으면 README.rst처럼 관례를 벗어난 레포에서 바로 틀린다.
+        indexed = {c.file for c in all_chunks}
+
+        skipped = group_by_extension(collected.skipped_other, root, indexed)
+        line = format_skipped(skipped)
+        if line:
+            print(line)
+
+        # 크기 초과는 종류가 다른 누락이다. 확장자가 대상이 아닌 파일과 달리
+        # 사용자가 분석되리라 믿는 파이썬 파일이 빠진 것이라 이름까지 밝힌다.
+        for path in collected.skipped_by_size:
+            print(f"크기 초과 제외: {to_relative(path, root)}")
+
     return all_chunks
 
 if __name__ == "__main__":
