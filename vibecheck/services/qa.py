@@ -170,6 +170,107 @@ def search_by_identifier(
 
     return [c for _, c in hits[:limit]]
 
+CALLER_LIMIT = 10
+"""한 심볼에 대해 보여줄 호출처 수의 상한.
+
+전부 싣는 것이 원칙이지만 널리 쓰이는 유틸리티는 호출처가 수십 개가 된다.
+프롬프트가 호출 목록으로 채워지면 정작 코드를 읽을 자리가 줄어든다.
+"""
+
+
+def find_callers(question: str, chunks: list[Chunk]) -> dict[str, list[str]]:
+    """질문에 이름이 나온 심볼을 부르는 곳을 대조로 찾는다.
+
+    검색이 아니라 전체 대조다. 인덱싱 때 이미 해석해둔 호출 관계를
+    거꾸로 훑으므로 상위 몇 개를 고르는 일이 없고, 놓치는 것은
+    이름이 겹쳐 끝내 좁히지 못한 호출뿐이다.
+
+    이것이 필요한 이유는 검색이 원리적으로 못 하는 질의가 있기 때문이다.
+    `store.prune()`으로 적힌 자리에는 VectorStore라는 글자가 없다.
+    `VectorStore.prune은 어디서 호출되나요`로 물으면 그 문자열이 소스에
+    존재하지 않아 임베딩도 문자열 매칭도 닿지 못하고, 실제로 유일한
+    호출처를 하나도 찾지 못했다.
+
+    심볼 전체 이름으로만 대조한다. `prune`처럼 소유자를 뗀 이름은 받지 않는다.
+    이 레포에는 prune이 Manifest에도 VectorStore에도 있어 어느 쪽을 묻는지
+    정할 수 없다. 둘 다 보여주면 사용자가 없는 호출 관계를 믿게 된다.
+    좁히지 못하면 이 경로를 열지 않고 기존 검색에 맡긴다.
+
+    Args:
+        question (str): 사용자 질문.
+        chunks (list[Chunk]): 인덱싱된 전체 청크 목록.
+
+    Returns:
+        dict[str, list[str]]: 불리는 심볼 식별자 -> 부르는 심볼 식별자 목록.
+            질문에 심볼 이름이 없으면 빈 딕셔너리.
+    """
+    # \b를 쓰지 않는다. 파이썬 정규식에서 한글은 단어 문자라
+    # "VectorStore.prune은"처럼 조사가 바로 붙으면 경계가 성립하지 않아
+    # 긴 이름이 통째로 탈락한다. 영어 기준으로 맞는 규칙이 한글 질문에서 깨진다.
+    # 앞뒤가 식별자로 이어지지만 않으면 된다. 점은 이어짐으로 보지 않으므로
+    # VectorStore.prune을 물으면 VectorStore도 함께 걸리는데, 그것은 아래에서 거른다.
+    named = {
+        c.id: c.symbol
+        for c in chunks
+        if c.kind not in ("file", "doc", "config")
+        and re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(c.symbol)}(?![A-Za-z0-9_])", question
+        )
+    }
+    if not named:
+        return {}
+
+    # 긴 이름에 짧은 이름이 포함되면 짧은 쪽은 버린다.
+    # VectorStore.prune을 물었는데 VectorStore까지 남으면 클래스를 쓰는 곳이
+    # 대조 결과에 실려, 묻지 않은 답이 한 문단 따라붙는다.
+    symbols = set(named.values())
+    named = {
+        cid: sym
+        for cid, sym in named.items()
+        if not any(other != sym and sym in other for other in symbols)
+    }
+
+    result: dict[str, list[str]] = {}
+    for target_id in named:
+        callers = sorted(c.id for c in chunks if target_id in c.calls)
+        if callers:
+            result[target_id] = callers[:CALLER_LIMIT]
+
+    return result
+
+
+def format_callers(callers: dict[str, list[str]]) -> str:
+    """호출처 대조 결과를 프롬프트에 실을 문장으로 만든다.
+
+    검색 근거와 구분해서 싣는다. 근거 청크는 질문과 가까운 것을 골라 온
+    추정이지만 이쪽은 레포 전체를 대조한 결과다. 확신의 근거가 다른 둘을
+    섞으면 모델이 같은 무게로 다루게 된다.
+
+    빠질 수 있다는 것도 함께 적는다. 이름이 겹쳐 좁히지 못한 호출은
+    찍지 않고 버렸으므로 목록이 전부가 아닐 수 있다.
+
+    Args:
+        callers (dict[str, list[str]]): find_callers의 결과.
+
+    Returns:
+        str: 프롬프트에 넣을 문장. 결과가 비었으면 빈 문자열.
+    """
+    if not callers:
+        return ""
+
+    lines = [
+        "인덱싱 때 레포 전체를 대조해 얻은 호출 관계입니다.",
+        "검색 결과가 아니라 대조 결과이므로 아래 목록은 그대로 단정해도 됩니다.",
+        "다만 이름이 겹쳐 어느 정의를 가리키는지 좁히지 못한 호출은 빠져 있습니다.",
+        "",
+    ]
+    for target, who in callers.items():
+        lines.append(f"{target} 를 호출하는 곳:")
+        lines += [f"  - {caller}" for caller in who]
+        lines.append("")
+
+    return "\n".join(lines)
+
 
 def search_by_kind(
     question: str,
@@ -376,7 +477,17 @@ def answer(
         return "관련된 코드를 찾지 못했습니다.", []
 
     system = load_prompt("answer_question")
-    user = f"질문: {question}\n\n참고할 코드:\n\n{build_context(found)}"
+
+    # 대조 결과를 코드 앞에 둔다. 뒤에 두면 긴 코드 블록에 묻히고,
+    # 이 질문에서 가장 확실한 사실이 가장 늦게 읽힌다.
+    parts = [f"질문: {question}", ""]
+
+    callers = format_callers(find_callers(question, chunks))
+    if callers:
+        parts += [callers, ""]
+
+    parts += ["참고할 코드:", "", build_context(found)]
+    user = "\n".join(parts)
 
     return llm.complete(system, user, max_tokens=2000), found
 
