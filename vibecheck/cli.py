@@ -15,6 +15,7 @@
 버려지는 것은 이 파일이고 services는 그대로 살아남는다.
 """
 
+import shlex
 from pathlib import Path
 
 import typer
@@ -81,7 +82,7 @@ def open_or_exit(repo: Path) -> tuple[list, str, dict]:
         chunks, chroma_dir, stale, meta = open_index(repo)
     except IndexNotFound:
         typer.secho(f"인덱스가 없습니다: {repo}", fg=typer.colors.RED)
-        typer.echo(f"먼저 인덱싱하세요:  whyd index {repo}")
+        typer.echo(f"먼저 인덱싱하세요:  whyd index {shlex.quote(str(repo))}")
         raise typer.Exit(1)
     except IndexEmpty:
         typer.secho("인덱스가 비어 있습니다. 다시 인덱싱하세요.", fg=typer.colors.RED)
@@ -228,7 +229,11 @@ def index(
     if removed:
         typer.secho(f"오래된 청크 {removed}개 삭제", fg=typer.colors.YELLOW)
     typer.secho(f"\n완료: 청크 {len(chunks)}개 -> {persist_base}", fg=typer.colors.GREEN)
-    typer.echo(f'이제 질문할 수 있습니다:  whyd ask {repo} "질문 내용"')
+    # 복사해 붙여 쓰라고 내놓는 명령줄이므로 실행 가능한 형태여야 한다.
+    # 경로에 공백이 있으면 셸이 두 인자로 쪼개, 안내대로 했는데 실패한다.
+    typer.echo(
+        f'이제 질문할 수 있습니다:  whyd ask {shlex.quote(str(repo))} "질문 내용"'
+    )
 
 
 @app.command()
@@ -401,7 +406,9 @@ def practice(
         if row is None:
             if total == 0:
                 typer.secho("저장된 질문이 없습니다.", fg=typer.colors.RED)
-                typer.echo(f"먼저 질문을 만드세요:  whyd interview {repo}")
+                typer.echo(
+                    f"먼저 질문을 만드세요:  whyd interview {shlex.quote(str(repo))}"
+                )
             else:
                 typer.secho(
                     f"{question_no}번 질문이 없습니다. 1에서 {total} 사이로 지정하세요.",
@@ -485,7 +492,7 @@ def history(
 
     if not answers:
         typer.secho("아직 연습 기록이 없습니다.", fg=typer.colors.YELLOW)
-        typer.echo(f"연습을 시작하세요:  whyd interview {repo}")
+        typer.echo(f"연습을 시작하세요:  whyd interview {shlex.quote(str(repo))}")
         raise typer.Exit(0)
 
     typer.secho(f"\n연습 기록 ({len(answers)}건)", fg=typer.colors.CYAN, bold=True)
