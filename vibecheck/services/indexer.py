@@ -12,6 +12,7 @@ from vibecheck.core.chunker import (
     to_pyproject_chunk,
     to_readme_chunks,
 )
+from vibecheck.core.callgraph import build_call_map
 from vibecheck.core.collector import (
     collect_source_files,
     format_skipped,
@@ -20,13 +21,15 @@ from vibecheck.core.collector import (
 )
 from vibecheck.core.summarizer import summarize_all
 from vibecheck.core.parser import (
+    collect_calls,
+    enclosing,
     extract_imports,
     extract_module_docstring,
     parse_file,
     walk,
 )
 from vibecheck.llm.base import LLMClient
-from vibecheck.models import Chunk
+from vibecheck.models import CallSite, Chunk, Symbol
 
 def index_repo(
         root: str,
@@ -79,6 +82,13 @@ def index_repo(
     all_chunks: list[Chunk] = []
     cache_hits = 0
 
+    # 호출 해석에 쓸 재료를 모아둔다. 파일 하나를 보는 동안에는
+    # "이 이름의 정의가 레포에 하나뿐인가"를 답할 수 없어 여기서 정하지 못한다.
+    # 이미 파싱한 트리에서 꺼내므로 파일을 다시 읽지 않는다.
+    symbols_by_file: dict[str, list[Symbol]] = {}
+    calls_by_file: dict[str, list[tuple[CallSite, Symbol]]] = {}
+    imports_by_file: dict[str, list[str]] = {}
+
     for path in files:
         tree, source = parse_file(str(path))
         symbols = walk(tree.root_node, source)
@@ -88,6 +98,15 @@ def index_repo(
         rel = to_relative(path, root)
         text = source.decode()
         chunks = to_chunks(symbols, source, rel, imports)
+
+        symbols_by_file[rel] = symbols
+        imports_by_file[rel] = imports
+        # 어느 심볼에도 속하지 않는 호출은 붙일 자리가 없다. 청크가 심볼 단위다.
+        calls_by_file[rel] = [
+            (call, holder)
+            for call in collect_calls(tree.root_node, source)
+            if (holder := enclosing(symbols, call.line)) is not None
+        ]
 
         # 심볼이 없는 파일도 L1까지는 내려보낸다.
         # 여기서 continue하면 __init__.py처럼 정의가 없는 파일이
@@ -127,6 +146,16 @@ def index_repo(
     # 답변도 근거를 댈 수 없어 확인불가가 된다.
     all_chunks.extend(to_readme_chunks(root))
 
+    # 호출 해석은 모든 파일을 훑은 뒤에야 가능하다.
+    # 요약 재료에는 넣지 않는다. 재료가 바뀌면 캐시가 통째로 무효가 되어
+    # 레포 전체를 다시 요약하게 되는데, calls의 용도는 유사도 검색이 아니라
+    # "이 함수는 어디서 쓰이는가"를 정확 조회로 답하는 것이다.
+    call_map, call_stats = build_call_map(
+        symbols_by_file, calls_by_file, imports_by_file
+    )
+    for chunk in all_chunks:
+        chunk.calls = call_map.get(chunk.id, [])
+
     # 제외 대상이 된 파일의 캐시가 장부에 영구히 남는 것을 막는다.
     # update는 처리한 파일만 덮어쓰므로 지우는 자리가 여기밖에 없다.
     # README·pyproject 청크는 update를 타지 않아 장부에 항목이 없다.
@@ -147,6 +176,15 @@ def index_repo(
             parts += f" + 설정 {configs}개"
         print(f"[2/3] 청크 {total}개 생성 ({parts})")
         print(f"[3/3] 요약 완료 (캐시 재사용 {cache_hits}개 / 신규 {l2 - cache_hits}개)")
+
+        linked = sum(len(c.calls) for c in all_chunks)
+        unresolved = call_stats.get("모호", 0)
+        note = f"호출 {linked}건 연결"
+        if unresolved:
+            # 이름이 겹쳐 끝내 좁히지 못한 수다. 찍지 않고 버린 것이므로
+            # 틀린 화살표는 아니지만, 늘어나면 규칙을 손볼 자리가 된다.
+            note += f" (모호해서 버린 것 {unresolved}건)"
+        print(note)
 
         # 청크가 생긴 파일을 그대로 쓴다. README나 pyproject의 이름을
         # 직접 적으면 README.rst처럼 관례를 벗어난 레포에서 바로 틀린다.
