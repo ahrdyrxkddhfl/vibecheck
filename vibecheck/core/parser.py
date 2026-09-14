@@ -12,6 +12,7 @@ import tree_sitter_python as tspython
 from tree_sitter import Language, Node, Parser
 
 from vibecheck.models import Symbol
+from vibecheck.models import CallSite, Symbol
 
 PY_LANGUAGE = Language(tspython.language())
 
@@ -262,6 +263,95 @@ def extract_module_docstring(root_node, source: bytes) -> str | None:
         return None
 
     return None
+
+def collect_calls(node: Node, source: bytes, out: list[CallSite] | None = None) -> list[CallSite]:
+    """문법 트리에서 호출을 거둔다.
+
+    이름과 함께 수신자를 남긴다. self.foo()와 other.foo()는
+    가리키는 곳이 다를 수 있는데, 이름만 보면 둘이 구분되지 않는다.
+
+    여기서는 무엇이 호출됐는지만 적고 어느 정의를 가리키는지는 정하지 않는다.
+    판별에는 레포 전체의 심볼 목록이 필요한데 파싱은 파일 단위로 일어난다.
+
+    obj.attr처럼 부르지 않은 참조는 거두지 않는다. call 노드만 본다.
+    함수를 값으로 넘기는 것(callback=handler)은 호출이 아니므로
+    화살표를 그으면 실행 흐름을 잘못 그리게 된다.
+
+    Args:
+        node (Node): 순회를 시작할 노드.
+        source (bytes): 원본 소스. 이름을 꺼낼 때 쓴다.
+        out (list[CallSite] | None): 누적 목록. 재귀 호출 간 공유된다.
+
+    Returns:
+        list[CallSite]: 발견한 호출 목록. 소스 등장 순서를 따른다.
+    """
+    if out is None:
+        out = []
+
+    if node.type == "call":
+        fn = node.child_by_field_name("function")
+        if fn is not None:
+            if fn.type == "identifier":
+                out.append(
+                    CallSite(
+                        name=source[fn.start_byte : fn.end_byte].decode(),
+                        receiver=None,
+                        line=fn.start_point[0] + 1,
+                    )
+                )
+            elif fn.type == "attribute":
+                attr = fn.child_by_field_name("attribute")
+                obj = fn.child_by_field_name("object")
+                if attr is not None:
+                    # a.b.c()처럼 수신자가 또 점으로 이어지면 이름을 꺼내지 않는다.
+                    # 중간 단계의 타입을 모르면 어차피 해석할 수 없고,
+                    # 마지막 조각만 떼어 오면 엉뚱한 것을 수신자로 삼는다.
+                    receiver = None
+                    if obj is not None and obj.type == "identifier":
+                        receiver = source[obj.start_byte : obj.end_byte].decode()
+
+                    out.append(
+                        CallSite(
+                            name=source[attr.start_byte : attr.end_byte].decode(),
+                            receiver=receiver,
+                            line=attr.start_point[0] + 1,
+                        )
+                    )
+
+    for child in node.children:
+        collect_calls(child, source, out)
+
+    return out
+
+
+def enclosing(symbols: list[Symbol], line: int) -> Symbol | None:
+    """그 줄을 감싸는 가장 안쪽 심볼을 찾는다.
+
+    호출은 "누가 누구를 부른다"의 두 끝이 다 있어야 화살표가 된다.
+    collect_calls는 불린 쪽만 알므로 부른 쪽을 줄 번호로 되찾는다.
+
+    가장 좁은 범위를 고르는 이유는 중첩 때문이다. 클래스 안의 메서드 안에서
+    부르면 클래스와 메서드가 모두 그 줄을 감싼다. 부른 주체는 메서드다.
+
+    어느 심볼에도 속하지 않는 호출은 None이다. 모듈 수준에서 부른 것으로,
+    청크가 심볼 단위라 붙일 자리가 없다. 이 레포에서 963개 중 71개다.
+
+    Args:
+        symbols (list[Symbol]): 그 파일의 심볼 목록.
+        line (int): 찾을 행 번호.
+
+    Returns:
+        Symbol | None: 가장 안쪽 심볼. 감싸는 것이 없으면 None.
+    """
+    best = None
+    for symbol in symbols:
+        if not (symbol.start_line <= line <= symbol.end_line):
+            continue
+        if best is None or (symbol.end_line - symbol.start_line) < (
+            best.end_line - best.start_line
+        ):
+            best = symbol
+    return best
 # ===================
 # 실행부(계속 수정 중...)
 # ===================

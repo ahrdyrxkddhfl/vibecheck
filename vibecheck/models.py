@@ -33,7 +33,30 @@ class Symbol:
     end_line: int
     parent: str | None = None
 
+@dataclass
+class CallSite:
+    """소스에서 발견한 호출 하나.
 
+    이름만으로는 어느 정의를 가리키는지 정할 수 없다. 같은 이름의 함수가
+    여러 파일에 있을 수 있고, 파이썬 내장 메서드와 겹치기도 한다.
+    판별에 필요한 재료를 함께 담아 해석 단계로 넘긴다.
+
+    해석을 파싱 시점에 하지 않는 이유는 재료가 부족하기 때문이다.
+    "이 이름의 정의가 레포에 하나뿐인가"는 전체 파일을 훑은 뒤에야 답할 수 있다.
+
+    Attributes:
+        name (str): 호출된 이름. foo()의 foo, obj.bar()의 bar다.
+        receiver (str | None): 점 앞의 이름. foo()면 None, self.bar()면 "self".
+            self인지 아닌지가 특히 중요하다. self면 같은 클래스 안에서
+            먼저 찾을 수 있어 같은 이름의 다른 정의와 구분된다.
+        line (int): 호출이 나타난 행 번호 (1-based).
+            어느 심볼 안에서 불렸는지 되찾는 데 쓴다.
+    """
+
+    name: str
+    receiver: str | None
+    line: int
+    
 @dataclass
 class Chunk:
     """검색과 요약의 최소 단위.
