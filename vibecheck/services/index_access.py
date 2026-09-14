@@ -136,6 +136,7 @@ def load_chunks(repo: Path, persist_dir: str) -> tuple[list[Chunk], int]:
                 code="\n".join(src_lines[meta["start_line"] - 1 : meta["end_line"]]),
                 summary=meta["summary"],
                 imports=meta.get("imports", "").split(",") if meta.get("imports") else [],
+                calls=meta.get("calls", "").split("\n") if meta.get("calls") else [],
             )
         )
 
