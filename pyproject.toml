@@ -12,10 +12,21 @@ dependencies = [
     "rich",
     "chromadb",
     "sentence-transformers",
+    "fastapi",
+    "uvicorn",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [project.scripts]
 whyd = "vibecheck.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vibecheck*"]
 
 [build-system]
 requires = ["setuptools>=68"]
