@@ -174,7 +174,7 @@ def collect_files(root: str, exclude_dirs: set[str] | None = None) -> list[Path]
 
 
 def to_relative(path: Path, root: str) -> str:
-    """절대 경로를 레포 루트 기준 상대 경로 문자여롤 변환한다.
+    """절대 경로를 레포 루트 기준 상대 경로 문자열로 변환한다.
 
     Chunk에 저장되는 경로는 상대 경로여야 한다.
     절대 경로를 저장하면 사용자의 홈 디렉토리 이름 같은 개인 정보가 인덱스에 포함되고,

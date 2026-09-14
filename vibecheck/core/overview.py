@@ -17,7 +17,6 @@ from pathlib import Path
 
 from vibecheck.core.collector import (
     build_module_map,
-    build_module_names,
     collect_source_files,
     format_skipped,
     group_by_extension,
