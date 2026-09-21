@@ -16,7 +16,10 @@
 """
 
 import shlex
+import threading
+import webbrowser
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 
@@ -530,6 +533,64 @@ def history(
         typer.secho("\n근거 없이 단정한 주장", fg=typer.colors.CYAN, bold=True)
         for r in risky:
             typer.echo(f"  - {r['claim'][:70]}")
+
+
+@app.command(help="웹 화면을 띄운다. 레포 경로를 주면 그 레포를 연 채로 시작한다.")
+def serve(
+    repo: Path = typer.Argument(None, help="열면서 바로 분석할 레포 경로 (선택)"),
+    port: int = typer.Option(8000, "--port", "-p", help="사용할 포트"),
+    host: str = typer.Option("127.0.0.1", "--host", help="바인딩할 주소"),
+    reload: bool = typer.Option(
+        False, "--reload", help="코드 변경 시 자동 재시작 (개발용)"
+    ),
+    no_browser: bool = typer.Option(
+        False, "--no-browser", help="브라우저를 자동으로 열지 않는다"
+    ),
+) -> None:
+    """웹 화면을 띄운다.
+
+    uvicorn 명령을 직접 치지 않아도 되게 하는 것이 이 명령의 전부다.
+    처음 쓰는 사람이 모듈 경로를 알아야 화면에 닿는 상태를 없앤다.
+
+    uvicorn을 함수 안에서 import하는 이유는 시작 시간이다. whyd는 대부분
+    ask와 practice로 쓰이는데, 그때마다 웹 서버 의존성을 읽어들일 이유가 없다.
+
+    자동 재시작을 기본으로 두지 않는 이유는 쓰는 사람이 코드를 고치지 않기
+    때문이다. 감시 프로세스가 하나 더 뜨고 재시작이 얽히는 값을 치를 이유가
+    없다. 개발 중에는 플래그로 켠다.
+
+    재시작 모드에서 브라우저를 열지 않는 것은 탭이 쌓이기 때문이다.
+    uvicorn은 코드가 바뀔 때마다 워커를 새로 띄우는데, 그 자리에서 열면
+    파일을 저장할 때마다 창이 하나씩 생긴다.
+
+    브라우저를 지연 후 여는 이유는 순서다. uvicorn.run()은 돌아오지 않으므로
+    그 뒤에 열 수 없고, 먼저 열면 서버가 아직 없어 연결 거부를 보게 된다.
+
+    Args:
+        repo (Path): 화면을 열면서 바로 분석할 레포 경로. 생략하면 빈 화면.
+        port (int): 사용할 포트.
+        host (str): 바인딩할 주소. 기본은 로컬 전용이다.
+        reload (bool): 코드 변경 시 자동 재시작 여부.
+        no_browser (bool): 브라우저 자동 열기를 끄는지 여부.
+    """
+    import uvicorn
+
+    url = f"http://{host}:{port}"
+
+    # 경로를 받았으면 화면이 그 레포를 연 상태로 시작한다.
+    # 쿼리스트링 복원은 화면이 이미 갖고 있으므로 주소만 만들면 된다.
+    if repo is not None:
+        url += "?path=" + quote(str(repo.expanduser().resolve()))
+
+    typer.echo(f"VibeCheck 웹 화면: {url}")
+    typer.echo("종료하려면 Ctrl+C\n")
+
+    if not no_browser and not reload:
+        threading.Timer(1.0, webbrowser.open, args=[url]).start()
+
+    # 재시작 모드에서는 앱 객체를 넘길 수 없다.
+    # uvicorn이 워커를 새로 띄울 때 모듈을 다시 읽어야 하므로 경로 문자열이어야 한다.
+    uvicorn.run("vibecheck.web.app:app", host=host, port=port, reload=reload)
 
 
 def main() -> None:
