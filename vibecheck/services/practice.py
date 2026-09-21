@@ -18,9 +18,12 @@
 답변이 무엇이든 근거의 절반은 질문 기준으로 채워진다.
 """
 
+import ast
 import json
 import re
+from dataclasses import replace
 
+from vibecheck.core.chunker import to_file_chunk
 from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import AnswerFeedback, Chunk, ClaimCheck
@@ -282,6 +285,64 @@ def search_union(
 
     return found
 
+L2_KINDS = ("function", "method", "class")
+
+
+def compact_file_chunk(chunk: Chunk, chunks: list[Chunk]) -> Chunk:
+    """파일 청크를 채점기에 넘길 개요로 줄인다.
+
+    파일 청크는 import 목록과 심볼 요약을 담은 개요로 설계됐지만,
+    인덱스에서 복원할 때 줄 범위(1~끝)로 지금 파일 원문을 다시 읽어 그 자리를
+    채운다. 답변이 짚은 파일을 근거로 가져오기 시작하자 원문 네 개가 통째로
+    들어가, 채점 한 번의 입력이 12,709토큰에서 27,561토큰으로 늘었다.
+
+    개요만 넣으면 입력은 9,213토큰으로 줄지만 "post_practice가 save_answer를
+    부른다" 같은 주장이 세 판 모두 확인불가가 됐다. import 목록에는 모듈 이름만
+    있고 함수 이름은 없기 때문이다. 인덱싱 때 해석해둔 호출 관계를 심볼마다
+    한 줄씩 붙이면 10,372토큰에 그 주장이 세 판 모두 확인됐다.
+
+    복원 경로(load_chunks)를 고치지 않고 여기서 바꾸는 이유는 범위다.
+    파일 청크는 모듈 지도, 리포트, 면접 질문, 질의응답에서도 쓰이므로
+    복원을 바꾸면 그 전부를 다시 확인해야 한다. 잰 것은 채점뿐이다.
+
+    Args:
+        chunk (Chunk): 근거 청크 하나. 파이썬 파일 청크가 아니면 그대로 돌려준다.
+        chunks (list[Chunk]): 인덱싱된 전체 청크. 같은 파일의 심볼을 찾는 데 쓴다.
+
+    Returns:
+        Chunk: 코드 자리를 개요와 호출 목록으로 바꾼 사본, 또는 원래 청크.
+    """
+    if chunk.kind != "file" or not chunk.file.endswith(".py"):
+        return chunk
+
+    members = [c for c in chunks if c.file == chunk.file and c.kind in L2_KINDS]
+
+    # 복원된 파일 청크의 코드 자리가 지금은 원문이므로 거기서 모듈 독스트링을
+    # 다시 꺼낸다. 원문이 파싱되지 않으면 독스트링 없이 조립한다.
+    try:
+        docstring = ast.get_docstring(ast.parse(chunk.code))
+    except SyntaxError:
+        docstring = None
+
+    rebuilt = to_file_chunk(
+        members,
+        chunk.file,
+        chunk.end_line,
+        imports=chunk.imports,
+        source_text=chunk.code,
+        docstring=docstring,
+    )
+    if rebuilt is None:
+        return chunk
+
+    code = rebuilt.code
+    calls = [f" {c.symbol} -> {', '.join(c.calls)}" for c in members if c.calls]
+    if calls:
+        code += "\n\n각 심볼이 부르는 것:\n" + "\n".join(calls)
+
+    return replace(chunk, code=code)
+
+
 def grade(
     question: str,
     user_answer: str,
@@ -310,7 +371,10 @@ def grade(
         AnswerFeedback: 채점 결과. 근거 청크를 찾지 못하면 모든 점수가 0이고
             verdict_line에 그 사실이 담긴다.
     """
-    found = search_union(question, user_answer, chunks, store, top_k)
+    found = [
+        compact_file_chunk(c, chunks)
+        for c in search_union(question, user_answer, chunks, store, top_k)
+    ]
 
     if not found:
         return AnswerFeedback(
