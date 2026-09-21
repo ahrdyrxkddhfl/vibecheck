@@ -585,12 +585,20 @@ def serve(
     typer.echo(f"VibeCheck 웹 화면: {url}")
     typer.echo("종료하려면 Ctrl+C\n")
 
+    timer = None
     if not no_browser and not reload:
-        threading.Timer(1.0, webbrowser.open, args=[url]).start()
+        timer = threading.Timer(1.0, webbrowser.open, args=[url])
+        timer.start()
 
     # 재시작 모드에서는 앱 객체를 넘길 수 없다.
     # uvicorn이 워커를 새로 띄울 때 모듈을 다시 읽어야 하므로 경로 문자열이어야 한다.
-    uvicorn.run("vibecheck.web.app:app", host=host, port=port, reload=reload)
+    # 포트를 못 잡으면 uvicorn은 곧바로 종료하는데, 그때 타이머가 살아 있으면
+    # 그 포트를 쥐고 있는 다른 서버를 열어버린다. 서버가 끝나면 타이머도 거둔다.
+    try:
+        uvicorn.run("vibecheck.web.app:app", host=host, port=port, reload=reload)
+    finally:
+        if timer is not None:
+            timer.cancel()
 
 
 def main() -> None:
