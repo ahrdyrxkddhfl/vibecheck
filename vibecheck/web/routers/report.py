@@ -8,7 +8,7 @@
 
 from dataclasses import asdict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from vibecheck.core.collector import collect_files
@@ -17,6 +17,7 @@ from vibecheck.core.quirks import find_quirks, group_quirks
 from vibecheck.llm.anthropic import AnthropicClient
 from vibecheck.services.interview import STAGE_ORDER, build_questions
 from vibecheck.services.practice import grade
+from vibecheck.services.relations import file_relations
 from vibecheck.store.records import connect, get_repo_id, save_answer
 from vibecheck.store.vector import VectorStore
 from vibecheck.web.deps import Index, RepoPath
@@ -168,6 +169,42 @@ def get_interview(repo: RepoPath, index: Index) -> dict:
         "total": number,
         "stale_count": stale,
     }
+
+@router.get("/relations")
+def get_relations(index: Index, file: str) -> dict:
+    """파일 하나를 가운데 둔 호출 관계를 반환한다. LLM을 부르지 않는다.
+
+    관계도 화면이 파일을 누를 때마다 부른다. 레포 전체 관계를 한 번에
+    내보내지 않는 이유는 크기다. 이 레포는 심볼 145개라 작지만 이 도구는
+    남의 레포에 쓰는 것이고, 한 화면에 그리는 것은 어차피 한 파일의 이웃뿐이다.
+
+    인덱싱 시점의 관계라는 것을 잊으면 안 된다. 인덱싱 뒤에 코드를 고치면
+    새로 생긴 호출은 여기 없다. 그래서 개요처럼 `stale_count`를 싣는다.
+
+    Args:
+        index: `open_index()`의 반환값.
+        file: 가운데 둘 파일의 레포 기준 상대 경로.
+
+    Returns:
+        dict: `file_relations`의 결과에 `stale_count`를 더한 것.
+
+    Raises:
+        HTTPException: 그 파일에 함수나 클래스가 없으면 404.
+    """
+    chunks, _chroma_dir, stale, _meta = index
+
+    data = file_relations(chunks, file)
+    if data is None:
+        # 경로 오타와 "정의가 없는 파일"(__init__.py 등)을 구분하지 않는다.
+        # 어느 쪽이든 그릴 것이 없다는 점은 같고, 사용자가 할 일도 같다.
+        raise HTTPException(
+            status_code=404,
+            detail=f"{file}에서 함수나 클래스를 찾지 못했습니다. "
+            "경로가 맞는지, 정의가 없는 파일은 아닌지 확인하세요.",
+        )
+
+    data["stale_count"] = stale
+    return data
 
 @router.post("/practice")
 def post_practice(repo: RepoPath, index: Index, req: PracticeRequest) -> dict:
