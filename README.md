@@ -46,6 +46,15 @@ cp .env.example .env
 # .env 파일에 ANTHROPIC_API_KEY 입력
 ```
 
+테스트:
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+파일 수집과 README 청킹에서 실제로 났던 버그들을 고정해둔 테스트입니다.
+
 ## 빠른 시작
 
 ```bash
