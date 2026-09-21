@@ -19,6 +19,7 @@
 """
 
 import json
+import re
 
 from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
@@ -154,6 +155,58 @@ def parse_feedback(
         ],
     )
 
+PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_./-])[A-Za-z0-9_][A-Za-z0-9_./-]*\.py(?![A-Za-z0-9_])")
+"""답변에서 파이썬 파일 경로를 떼어내는 무늬.
+
+"cli.py"처럼 이름만 쓴 것과 "web/routers/report.py"처럼 경로를 쓴 것을 모두 잡는다.
+뒤쪽 경계를 \b로 두지 않는 이유는 한글 조사다. 파이썬 정규식은 한글을 글자로
+보므로 "cli.py가"에서 y와 가 사이에 경계가 없다고 판단해 통째로 놓친다.
+"""
+
+
+def find_mentioned_files(user_answer: str, chunks: list[Chunk]) -> list[Chunk]:
+    """답변이 이름으로 짚은 파일의 파일 단위(L1) 청크를 찾는다.
+
+    "cli.py가 services를 import한다"는 주장을 확인해줄 수 있는 것은 cli.py의
+    파일 청크뿐이다. import 문은 함수 밖에 있어 함수 청크에는 담기지 않고,
+    파일 청크 본문의 import 목록에만 있다. 그런데 벡터 검색은 파일 이름이 아니라
+    문장의 뜻으로 찾으므로, 답변에 cli.py라고 적혀 있어도 그 청크를 가져오지 못했다.
+    그 결과 사실을 정확히 말한 사용자가 근거 없이 단정했다는 판정을 받았다.
+
+    사용자가 짚은 파일을 가져오는 것은 답변 쪽으로 검색이 끌려가는 것과 다르다.
+    틀린 파일을 짚었다면 그 파일을 봐야 채점기가 반박할 수 있다.
+    끌려가는 것이 아니라 확인하러 가는 것이다.
+
+    이름만 써서 파일이 둘 이상 걸리면 건너뛴다. "report.py"는 services와
+    web/routers에 하나씩 있다. 어느 쪽인지 짐작해 가져오면 틀렸을 때 근거
+    한 자리를 버리게 되고, 그 자리는 벡터 검색이 채우는 편이 낫다.
+
+    Args:
+        user_answer (str): 사용자 답변 원문.
+        chunks (list[Chunk]): 인덱싱된 전체 청크 목록.
+
+    Returns:
+        list[Chunk]: 답변에 처음 나온 순서대로 정렬한 파일 청크 목록.
+    """
+    file_chunks = [c for c in chunks if c.kind == "file" and c.file.endswith(".py")]
+
+    found: list[Chunk] = []
+    seen: set[str] = set()
+
+    for mention in PATH_PATTERN.findall(user_answer):
+        matches = [
+            c for c in file_chunks
+            if c.file == mention or c.file.endswith("/" + mention)
+        ]
+        if len(matches) != 1 or matches[0].id in seen:
+            continue
+
+        seen.add(matches[0].id)
+        found.append(matches[0])
+
+    return found
+
+
 def search_union(
     question: str,
     user_answer: str,
@@ -175,6 +228,12 @@ def search_union(
     검색이 그쪽으로 끌려가는 것이 이 방식의 위험인데, 질문 몫을 고정해두면
     답변이 무엇이든 절반은 질문 기준으로 남는다.
 
+    답변 몫에서는 답변이 이름으로 짚은 파일의 파일 청크가 벡터 검색보다 먼저
+    자리를 받는다. 답변 전체를 벡터 하나로 검색하면 여러 주장의 뜻이 섞이고
+    128토큰 뒤의 주장은 아예 반영되지 않는다. 의존 방향을 묻는 질문에서
+    cli.py와 web/routers/report.py를 정확히 짚은 답변이 그 두 파일을 근거로
+    받지 못해, 사실인 주장 일곱 중 넷이 확인불가가 됐다.
+
     전체 개수는 top_k를 넘기지 않는다. 근거 수가 늘면 같은 답변의 점수가
     달라지는 것을 확인했으므로, 쿼리 방식만 바뀐 비교가 되려면
     근거 수는 그대로여야 한다.
@@ -187,7 +246,8 @@ def search_union(
         top_k (int): 근거로 사용할 청크 수의 상한.
 
     Returns:
-        list[Chunk]: 합쳐진 근거 청크 목록. 질문 기준 결과가 앞에 온다.
+        list[Chunk]: 합쳐진 근거 청크 목록. 질문 기준 결과, 답변이 짚은 파일,
+            답변 기준 결과 순이다.
     """
     by_id = {c.id: c for c in chunks}
 
@@ -198,19 +258,26 @@ def search_union(
     found: list[Chunk] = []
     seen: set[str] = set()
 
-    for query, limit in ((question, question_k), (user_answer, top_k)):
-        if not query.strip():
-            continue
+    def take(chunk: Chunk | None) -> bool:
+        """근거에 하나를 더하고, 상한에 닿았는지 돌려준다."""
+        if chunk is None or chunk.id in seen:
+            return False
+        seen.add(chunk.id)
+        found.append(chunk)
+        return len(found) >= top_k
 
-        for hit in store.search(query, top_k=limit):
-            chunk = by_id.get(hit["id"])
-            if chunk is None or chunk.id in seen:
-                continue
+    if question.strip():
+        for hit in store.search(question, top_k=question_k):
+            if take(by_id.get(hit["id"])):
+                return found
 
-            seen.add(chunk.id)
-            found.append(chunk)
+    if user_answer.strip():
+        for chunk in find_mentioned_files(user_answer, chunks):
+            if take(chunk):
+                return found
 
-            if len(found) >= top_k:
+        for hit in store.search(user_answer, top_k=top_k):
+            if take(by_id.get(hit["id"])):
                 return found
 
     return found
