@@ -11,10 +11,23 @@ AI로 짠 코드, 돌아가긴 하는데 설명은 못 하겠을 때.
 <img src="docs/images/grading.png" width="720" alt="채점 화면: 답변을 주장 단위로 나눠 근거와 대조하고, 근거 없이 단정한 지점을 짚는다">
 
 ```
-$ whyd ask ./my-repo "사용자 인증은 어디서 처리돼?"
+$ whyd ask . "채점은 어디서 처리돼?"
 
-→ auth/middleware.py::verify_token (12-38)
-  요청 헤더의 Bearer 토큰을 검증하고 실패 시 401을 반환합니다.
+## 채점 처리 위치
+
+채점은 크게 **서비스 계층**과 **웹 라우터 계층**, 두 곳에 걸쳐 처리됩니다.
+
+### 1. 핵심 채점 로직 — `vibecheck/services/practice.py`의 `grade` 함수 (218–259행)
+
+실제 채점이 일어나는 곳입니다. 순서는 다음과 같습니다.
+
+1. **근거 청크 검색**: `search_union`을 호출해 질문과 사용자 답변으로 각각 벡터 검색을 수행하고, 결과를 중복 없이 합칩니다.
+...
+
+근거:
+  vibecheck/services/practice.py:218-259  grade
+  vibecheck/web/routers/report.py:173-239  post_practice
+  vibecheck/models.py:185-191  AnswerFeedback.total
   ...
 ```
 
