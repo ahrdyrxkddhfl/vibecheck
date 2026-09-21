@@ -197,11 +197,17 @@ def get_relations(index: Index, file: str) -> dict:
     if data is None:
         # 경로 오타와 "정의가 없는 파일"(__init__.py 등)을 구분하지 않는다.
         # 어느 쪽이든 그릴 것이 없다는 점은 같고, 사용자가 할 일도 같다.
-        raise HTTPException(
-            status_code=404,
-            detail=f"{file}에서 함수나 클래스를 찾지 못했습니다. "
-            "경로가 맞는지, 정의가 없는 파일은 아닌지 확인하세요.",
-        )
+        # 다만 건너뛴 청크가 있으면 그쪽이 더 흔한 원인이다. 인덱싱 뒤 고친
+        # 파일은 청크가 통째로 빠지므로, 그 파일을 누르면 여기로 온다.
+        detail = f"{file}에서 함수나 클래스를 찾지 못했습니다."
+        if stale:
+            detail += (
+                f" 인덱싱 뒤 바뀐 파일이라 건너뛰었을 수 있습니다"
+                f"(건너뛴 청크 {stale}개). whyd index로 다시 인덱싱하세요."
+            )
+        else:
+            detail += " 경로가 맞는지, 정의가 없는 파일은 아닌지 확인하세요."
+        raise HTTPException(status_code=404, detail=detail)
 
     data["stale_count"] = stale
     return data
