@@ -15,10 +15,18 @@ git 브랜치 전환은 내용이 같아도 mtime을 바꾸고, 반대로 내용
 이 정보가 없으면 리포트를 만들 때마다 사용자가 --exclude를 다시 쳐야 하고,
 빼먹으면 인덱스와 어긋난 숫자가 조용히 나온다. 웹에는 넘길 방법조차 없다.
 장부는 인덱싱이 여는 유일한 파일이므로 이 정보가 있어야 할 자리도 여기다.
+
+장부는 두 가지 일을 한다. 요약 캐시이면서, 지금 벡터 저장소의 청크가 어떤 해시의
+파일로 만들어졌는지의 기록이다(index_access.changed_files가 이것으로 인덱싱 뒤 바뀐
+파일을 가려낸다). 인덱싱 도중의 저장은 앞의 일에만 해야 한다. 파일을 고치고
+인덱싱하다 끊겼을 때 기록에 새 해시가 적히면, 벡터 저장소에는 옛 청크가 남아 있는데
+바뀌지 않은 파일로 판정되어 옛 줄 범위로 새 파일을 읽게 된다. 그래서 도중의 요약은
+pending에 따로 두고, 인덱싱이 끝까지 성공했을 때만 기록(files)으로 옮긴다.
 """
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +38,9 @@ MANIFEST_VERSION = 2
 1판은 최상위가 파일 경로 딕셔너리여서 메타데이터를 넣을 자리가 없었다.
 2판은 files와 index로 나눈다. 파일 경로와 메타데이터 키가 섞이면
 경로 이름에 따라 충돌할 수 있고, 파일 수를 세는 코드도 틀린다.
+
+pending은 2판에 더한 선택 항목이다. 없으면 빈 것으로 읽으므로 판을 올리지 않는다.
+옛 코드가 새 장부를 읽어도 files와 index만 보므로 어긋나지 않는다.
 """
 
 
@@ -53,7 +64,9 @@ class Manifest:
 
     Attributes:
         path: manifest.json 파일 경로.
-        data: 파일 경로를 키로 하는 캐시 내용.
+        data: 파일 경로를 키로 하는 캐시 내용. 지금 인덱스가 반영하는 해시다.
+        pending: 끝나지 않은 인덱싱이 새로 요약한 것. data와 같은 모양이다.
+            요약 캐시로는 쓰되, 인덱스가 반영하는 해시로는 쓰지 않는다.
         meta: 인덱싱 조건. exclude_dirs, file_count, indexed_at.
     """
 
@@ -73,6 +86,7 @@ class Manifest:
         """
         self.path = Path(persist_dir) / "manifest.json"
         self.data: dict = {}
+        self.pending: dict = {}
         self.meta: dict = {}
 
         if not self.path.exists():
@@ -89,6 +103,7 @@ class Manifest:
         if "files" in raw:
             self.data = raw.get("files") or {}
             self.meta = raw.get("index") or {}
+            self.pending = raw.get("pending") or {}
         else:
             # 1판: 최상위가 곧 파일 딕셔너리였다. 요약은 그대로 살린다.
             self.data = raw
@@ -118,6 +133,9 @@ class Manifest:
         파일 해시가 일치할 때만 적용한다.
         해시가 다르면 파일이 수정된 것이므로 캐시를 무시하고 새로 요약하게 둔다.
 
+        기록(data)에서 맞는 것이 없으면 pending을 본다. 지난번 인덱싱이 끊기기 전에
+        새로 요약해둔 것이 거기 있다. 이미 요금을 낸 요약을 버리지 않는다.
+
         심볼명이 일치하는 청크에만 요약을 넣는 이유는 파일이 같아도 새 함수가 추가되었을 수 있기 때문이다.
         없는 항목은 그냥 넘어가고 요약 단계에서 채워진다.
 
@@ -132,10 +150,13 @@ class Manifest:
             return 0
 
         key = chunks[0].file
-        entry = self.data.get(key)
+        current = file_hash(source_path)
 
-        if not entry or entry.get("hash") != file_hash(source_path):
-            return 0
+        entry = self.data.get(key)
+        if not entry or entry.get("hash") != current:
+            entry = self.pending.get(key)
+            if not entry or entry.get("hash") != current:
+                return 0
 
         cached = entry.get("chunks", {})
         hits = 0
@@ -148,7 +169,11 @@ class Manifest:
         return hits
 
     def update(self, chunks: list[Chunk], source_path: str) -> None:
-        """요약이 채워진 청크를 장부에 기록한다.
+        """요약이 채워진 청크를 pending에 적는다.
+
+        기록(data)에 바로 쓰지 않는다. 이 파일의 청크가 벡터 저장소에 들어가는
+        것은 인덱싱이 끝까지 성공한 뒤이므로, 그 전에 해시를 기록하면 저장소와
+        장부가 어긋난다. 기록으로 옮기는 것은 commit이 한다.
 
         Args:
             chunks (list[Chunk]): 요약이 완료된 청크 목록.
@@ -157,10 +182,19 @@ class Manifest:
         if not chunks:
             return
 
-        self.data[chunks[0].file] = {
+        self.pending[chunks[0].file] = {
             "hash": file_hash(source_path),
             "chunks": {c.id: c.summary for c in chunks if c.summary},
         }
+
+    def commit(self) -> None:
+        """pending을 기록(data)으로 옮긴다.
+
+        인덱싱이 끝까지 성공했을 때만 부른다. 이 뒤로는 기록된 해시가 곧
+        벡터 저장소에 들어갈 청크의 해시다.
+        """
+        self.data.update(self.pending)
+        self.pending = {}
 
     def prune(self, kept: set[str]) -> list[str]:
         """이번 인덱싱에서 수집되지 않은 파일의 캐시를 지운다.
@@ -197,15 +231,25 @@ class Manifest:
         ensure_ascii=False로 저장하는 이유는 한국어 요약이 유니코드 이스케이프로 저장되면
         사람이 직접 열어 확인할 수 없기 때문이다.
         캐시 문제를 디버깅할 때 내용을 읽을 수 있어야 한다.
+
+        임시 파일에 다 쓴 뒤 이름을 바꿔 덮어쓴다. 인덱싱 도중에 파일마다 저장하므로
+        쓰는 중에 끊길 수 있는데, 제자리에 쓰다 끊기면 반쯤 쓰인 장부가 남는다.
+        그 장부는 다음 실행에서 읽기에 실패해 빈 장부로 시작하고, 캐시가 통째로
+        사라진다. 이름 바꾸기는 한 번에 일어나므로 옛 장부나 새 장부 둘 중 하나만 남는다.
         """
         payload = {
             "version": MANIFEST_VERSION,
             "index": self.meta,
             "files": self.data,
         }
+        # 비어 있으면 적지 않는다. 끝까지 성공한 인덱싱 뒤의 장부는 예전과 같은 모양이다.
+        if self.pending:
+            payload["pending"] = self.pending
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
+        tmp = self.path.with_suffix(".json.tmp")
+        tmp.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        os.replace(tmp, self.path)

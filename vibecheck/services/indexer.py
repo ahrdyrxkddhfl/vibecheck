@@ -5,6 +5,8 @@
 같은 파이프라인을 공유할 수 있다.
 """
 
+import sys
+
 from vibecheck.store.manifest import Manifest
 from vibecheck.core.chunker import (
     to_chunks,
@@ -70,11 +72,15 @@ def index_repo(
         print(f"[1/3] 파일 {len(files)}개 수집")
 
     manifest = Manifest(persist_dir=persist_dir)
-    # 리포트·면접 질문이 같은 조건으로 계산되려면 조건이 남아 있어야 한다.
-    manifest.set_index_meta(exclude_dirs, len(files))
 
     all_chunks: list[Chunk] = []
     cache_hits = 0
+    summarized = 0
+
+    # 요약은 파일 수에 비례해 수 분이 걸리는데 그동안 아무것도 찍지 않으면 멈춘 것으로
+    # 보인다. 청크 수백 개인 레포에서 실제로 그렇게 보였다. 한 줄을 덮어쓰며 진행을
+    # 보여준다. 터미널이 아니면(파이프, 로그) 덮어쓰기가 줄마다 쌓이므로 끈다.
+    show_progress = verbose and sys.stdout.isatty()
 
     # 호출 해석에 쓸 재료를 모아둔다. 파일 하나를 보는 동안에는
     # "이 이름의 정의가 레포에 하나뿐인가"를 답할 수 없어 여기서 정하지 못한다.
@@ -83,7 +89,14 @@ def index_repo(
     calls_by_file: dict[str, list[tuple[CallSite, Symbol]]] = {}
     imports_by_file: dict[str, list[str]] = {}
 
-    for path in files:
+    for i, path in enumerate(files, start=1):
+        if show_progress:
+            print(
+                f"\r\033[K      파일 {i}/{len(files)} · 새로 요약 {summarized}개",
+                end="",
+                flush=True,
+            )
+
         # 수집기가 지원 확장자만 넘기므로 여기서 None이 나오지 않는다.
         spec = spec_for(path)
         tree, source = parse_file(str(path), spec.language)
@@ -118,10 +131,19 @@ def index_repo(
         if chunks:
             # 캐시를 먼저 채운다. summarize()는 summary가 있으면 건너뛰므로
             # 이 한 줄로 변경되지 않은 청크의 LLM 호출이 사라진다.
-            cache_hits += manifest.apply(chunks, str(path))
+            hits = manifest.apply(chunks, str(path))
+            cache_hits += hits
 
             summarize_all(chunks, llm)
             manifest.update(chunks, str(path))
+
+            # 새로 요약한 것이 있으면 바로 저장한다. 끝에 한 번만 저장하던 때는
+            # 중간에 끊으면 이미 요금을 낸 요약까지 전부 사라졌다. update는
+            # pending에만 적으므로 이 저장이 인덱스 기록을 바꾸지는 않는다.
+            new = len(chunks) - hits
+            if new:
+                summarized += new
+                manifest.save()
 
             all_chunks.extend(chunks)
 
@@ -160,10 +182,23 @@ def index_repo(
     for chunk in all_chunks:
         chunk.calls = call_map.get(chunk.id, [])
 
+    if show_progress:
+        # 덮어쓰던 진행 줄을 지워, 아래 요약 줄이 그 자리에서 시작하게 한다.
+        print("\r\033[K", end="", flush=True)
+
+    # 여기까지 왔으면 모든 파일을 끝까지 처리했다. 새로 요약한 것을 인덱스 기록으로
+    # 옮긴다. 도중에 끊기면 이 줄에 닿지 않아 기록은 옛 인덱스 그대로 남는다.
+    manifest.commit()
+
     # 제외 대상이 된 파일의 캐시가 장부에 영구히 남는 것을 막는다.
     # update는 처리한 파일만 덮어쓰므로 지우는 자리가 여기밖에 없다.
     # README·pyproject 청크는 update를 타지 않아 장부에 항목이 없다.
     manifest.prune({to_relative(p, root) for p in files})
+
+    # 리포트·면접 질문이 같은 조건으로 계산되려면 조건이 남아 있어야 한다.
+    # 끝에서 기록하는 이유는 commit과 같다. 도중의 저장에 새 조건이 실리면,
+    # 끊긴 뒤 옛 인덱스를 새 조건으로 읽게 된다.
+    manifest.set_index_meta(exclude_dirs, len(files))
 
     manifest.save()
 
