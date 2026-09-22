@@ -15,6 +15,7 @@
 
 from collections import Counter
 
+from vibecheck.core.languages import spec_for
 from vibecheck.models import Chunk
 
 L2_KINDS = ("function", "method", "class")
@@ -74,6 +75,10 @@ def file_relations(chunks: list[Chunk], file: str) -> dict | None:
             called_by (list[dict]): 이 파일을 부르는 다른 파일.
             calls (list[dict]): 이 파일이 부르는 다른 파일.
             symbols (list[dict]): 이 파일의 심볼. 줄 순서다.
+            calls_analyzed (bool): 이 파일의 언어가 호출을 수집하는지.
+                False면 called_by와 calls가 비어 있는 것은 연결이 없어서가
+                아니라 재지 않아서다. 화면이 둘을 구분해 말할 수 있게 싣는다.
+            language (str): 이 파일의 언어 표시 이름.
     """
     l2 = [c for c in chunks if c.kind in L2_KINDS]
     mine = sorted((c for c in l2 if c.file == file), key=lambda c: c.start_line)
@@ -111,9 +116,13 @@ def file_relations(chunks: list[Chunk], file: str) -> dict | None:
         for c in mine
     ]
 
+    spec = spec_for(file)
+
     return {
         "file": file,
         "called_by": neighbor_files(called_by),
         "calls": neighbor_files(calls),
         "symbols": symbols,
+        "calls_analyzed": bool(spec and spec.collect_calls),
+        "language": spec.label if spec else "",
     }

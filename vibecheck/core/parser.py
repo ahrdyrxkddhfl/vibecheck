@@ -8,6 +8,8 @@ tree-sitter로 소스를 문법 트리(AST)로 변환한 뒤, 트리를 순회�
 "이 함수가 어디서 끝나는가"와 "어느 클래스에 속하는가"를 판단할 수 없다.
 """
 
+import sys
+
 import tree_sitter_python as tspython
 from tree_sitter import Language, Node, Parser
 
@@ -17,6 +19,13 @@ PY_LANGUAGE = Language(tspython.language())
 
 CLASS_TYPES = frozenset({"class_definition"})
 """파이썬에서 클래스로 볼 노드 타입. 그 안의 정의는 메서드가 된다."""
+
+STDLIB_NAMES = sys.stdlib_module_names
+"""표준 라이브러리 모듈 이름 집합.
+
+하드코딩하지 않고 실행 중인 파이썬에서 가져온다.
+버전마다 목록이 달라지므로 직접 관리하면 반드시 어긋난다.
+"""
 
 FUNCTION_TYPES = frozenset({"function_definition"})
 """파이썬에서 함수로 볼 노드 타입. 클래스 바로 안이면 메서드, 아니면 함수다.
@@ -309,6 +318,40 @@ def extract_module_docstring(root_node, source: bytes) -> str | None:
         return None
 
     return None
+
+def dependency_name(import_name: str) -> tuple[str, bool]:
+    """외부 import를 의존성 목록에 올릴 이름으로 줄인다.
+
+    최상위 이름만 남긴다. httpx.AsyncClient와 httpx.RequestError는 같은
+    라이브러리이므로 따로 세면 의존성이 실제보다 많아 보인다. 파이썬은
+    최상위 이름이 곧 설치하는 패키지 이름이라 이것으로 충분하다.
+
+    Args:
+        import_name (str): 내부 모듈이 아닌 것으로 판정된 import 이름.
+
+    Returns:
+        tuple[str, bool]: (목록에 올릴 이름, 표준 라이브러리인지).
+    """
+    top = import_name.split(".")[0]
+    return top, top in STDLIB_NAMES
+
+
+def entry_evidence(source: str) -> str | None:
+    """파일 본문에서 직접 실행할 수 있다는 근거를 찾는다.
+
+    __main__ 블록은 tree-sitter 청킹 대상이 아니라 청크에 남지 않으므로
+    파일 본문을 직접 확인한다.
+
+    Args:
+        source (str): 파일 원문.
+
+    Returns:
+        str | None: 근거 문장. 찾지 못하면 None.
+    """
+    if '__name__ == "__main__"' in source or "__name__ == '__main__'" in source:
+        return "__main__ 블록이 있어 직접 실행 가능"
+    return None
+
 
 def collect_calls(node: Node, source: bytes, out: list[CallSite] | None = None) -> list[CallSite]:
     """문법 트리에서 호출을 거둔다.

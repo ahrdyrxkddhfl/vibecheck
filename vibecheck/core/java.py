@@ -8,6 +8,8 @@ import 방식에 맞춰져 있고, Java는 오버로딩과 인터페이스 주�
 어느 구현을 부르는지 좁혀지지 않는다. 틀린 화살표를 그리느니 그리지 않는다.
 """
 
+import re
+
 import tree_sitter_java as tsjava
 from tree_sitter import Language
 
@@ -160,3 +162,68 @@ def extract_file_doc(root_node, source: bytes) -> str | None:
         return clean_doc_comment(raw)
 
     return None
+
+
+STDLIB_PREFIXES = ("java.", "javax.")
+"""JDK에 들어 있는 패키지의 시작.
+
+javax 아래에는 JDK 밖에서 오는 것도 일부 있지만(예전의 javax.persistence),
+지금은 대부분 jakarta로 옮겨갔다. 표준으로 묶어 외부 의존성 목록에서 빼는
+쪽으로 틀리는 편이, java.util이 외부 라이브러리로 올라오는 것보다 낫다.
+"""
+
+MAIN_PATTERN = re.compile(r"\bstatic\s+void\s+main\s*\(")
+"""직접 실행할 수 있는 클래스의 main 메서드 선언."""
+
+
+def dependency_name(import_name: str) -> tuple[str, bool]:
+    """외부 import를 의존성 목록에 올릴 이름으로 줄인다.
+
+    파이썬처럼 첫 조각만 떼면 org.springframework와 org.junit이 모두
+    org가 되어 뜻이 사라진다. Java의 패키지 이름은 도메인을 거꾸로 쓴
+    것이라, 앞 두 조각이 대개 라이브러리를 가리킨다(org.springframework,
+    tools.jackson, jakarta.persistence).
+
+    대문자로 시작하는 조각부터는 버린다. 거기서부터는 패키지가 아니라 클래스와
+    그 멤버다. lombok.Getter처럼 패키지가 한 조각뿐이면 lombok이 남는다.
+
+    Args:
+        import_name (str): 내부 모듈이 아닌 것으로 판정된 import 이름.
+
+    Returns:
+        tuple[str, bool]: (목록에 올릴 이름, JDK 표준인지).
+    """
+    parts = import_name.split(".")
+    package = []
+    for part in parts:
+        if part[:1].isupper():
+            break
+        package.append(part)
+
+    # 첫 조각부터 대문자인 이상한 경우에도 빈 이름을 내지 않는다.
+    if not package:
+        package = parts[:1]
+
+    return ".".join(package[:2]), import_name.startswith(STDLIB_PREFIXES)
+
+
+def entry_evidence(source: str) -> str | None:
+    """파일 본문에서 직접 실행할 수 있다는 근거를 찾는다.
+
+    main 메서드가 있으면 실행 가능한 클래스다. Spring Boot 애플리케이션이면
+    그 사실을 덧붙인다. 테스트 설정 클래스에도 main이 있을 수 있는데, 그
+    구분은 파일 이름으로 순위를 매기는 쪽(overview의 NON_ENTRY_HINTS)이 한다.
+
+    Args:
+        source (str): 파일 원문.
+
+    Returns:
+        str | None: 근거 문장. 찾지 못하면 None.
+    """
+    if not MAIN_PATTERN.search(source):
+        return None
+
+    evidence = "main 메서드가 있어 직접 실행 가능"
+    if "@SpringBootApplication" in source:
+        evidence += ", @SpringBootApplication"
+    return evidence

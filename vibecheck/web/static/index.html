@@ -46,7 +46,7 @@
   .stat span { font-size: 0.8rem; color: var(--muted); }
 
 /* 규모 숫자 바로 아래에 붙는다. 위의 숫자가 레포 전체가 아니라
-   파이썬 파일만 센 것이라는 사실은 숫자와 떨어지면 읽히지 않는다. */
+   지원 언어 파일만 센 것이라는 사실은 숫자와 떨어지면 읽히지 않는다. */
   #scope {
     margin-top: 0.75rem; font-size: 0.82rem; color: var(--muted);
     line-height: 1.6;
@@ -588,15 +588,18 @@ function render(d) {
     return box;
   }));
 
-  // 분석하지 못한 파일을 숫자 바로 아래에 밝힌다. 파이썬만 읽는 도구가
-  // 자바 레포를 받아도 개요는 완성된 것처럼 나오는데, 화면에 그렇게 뜨면
-  // 사용자는 레포 전체가 분석된 줄 알고 결과를 신뢰한다.
+  // 분석하지 못한 파일을 숫자 바로 아래에 밝힌다. 일부 언어만 읽는 도구가
+  // 다른 언어로 된 레포를 받아도 개요는 완성된 것처럼 나오는데, 화면에 그렇게
+  // 뜨면 사용자는 레포 전체가 분석된 줄 알고 결과를 신뢰한다.
+  // 언어 이름은 서버가 지원 언어 목록에서 보낸다. 여기 적어두면 언어를 더할 때
+  // 화면만 옛말을 한다.
   const scope = [];
   if (d.skipped_note) {
-    scope.push(el("div", null, d.skipped_note + ". 파이썬 파일만 분석합니다."));
+    const langs = (d.languages || []).join("·");
+    scope.push(el("div", null, d.skipped_note + ". " + langs + " 파일만 분석합니다."));
   }
   // 크기 초과는 종류가 다른 누락이다. 사용자가 분석되리라 믿는
-  // 파이썬 파일이 빠진 것이라 개수가 아니라 이름을 밝힌다.
+  // 소스 파일이 빠진 것이라 개수가 아니라 이름을 밝힌다.
   (d.skipped_large || []).forEach((p) => {
     scope.push(el("div", null, "크기 상한을 넘겨 제외: " + p));
   });
@@ -1000,6 +1003,21 @@ async function showFile(path) {
       + "&file=" + encodeURIComponent(path);
     const rel = await body(await fetch("/api/relations" + query));
     if (my !== fetchSeq) return;
+
+    // 호출을 수집하지 않는 언어다. "부르는 파일 0개"라고 쓰면 아무와도 연결이
+    // 없는 파일로 읽힌다. 재지 않은 것과 없는 것을 구분해 말하고, 그림 자리는
+    // 비운 채 함수 목록만 보여준다.
+    if (!rel.calls_analyzed) {
+      $("gnote").replaceChildren(
+        el("div", null,
+          rel.language + " 파일은 호출 관계를 분석하지 않습니다. "
+          + "이 파일의 함수·클래스만 보여줍니다."),
+      );
+      $("graph").className = "graph";
+      $("graph").replaceChildren();
+      drawSymbols(rel);
+      return;
+    }
 
     $("gnote").replaceChildren(
       el("div", null,

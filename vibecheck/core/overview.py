@@ -10,7 +10,6 @@ LLM에 물을 이유가 없고, 조립은 실행할 때마다 같은 결과를 �
 문장으로 된 요약은 별도 모듈에서 LLM으로 생성한다.
 """
 
-import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +22,7 @@ from vibecheck.core.collector import (
     is_internal_import,
     to_relative,
 )
+from vibecheck.core.languages import spec_for
 from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import Chunk
@@ -45,13 +45,6 @@ scripts/ 아래 실험 스크립트 11개가 확정 진입점 1개를 묻었다.
 
 디렉터리가 아니라 파일 이름을 보는 이유는 관례를 벗어난 배치 때문이다.
 dummy_test.py는 tests/ 밖에 있어 경로만으로는 걸러지지 않는다.
-"""
-
-STDLIB_NAMES = sys.stdlib_module_names
-"""표준 라이브러리 모듈 이름 집합.
-
-하드코딩하지 않고 실행 중인 파이썬에서 가져온다.
-버전마다 목록이 달라지므로 직접 관리하면 반드시 어긋난다.
 """
 
 README_LIMIT = 3000
@@ -139,9 +132,11 @@ def split_dependencies(
     os나 json을 왜 썼는지 묻는 사람은 없다. httpx와 pydantic을 골랐다는 것이 정보이고,
     표준 라이브러리 열 몇 개가 목록에 섞이면 그 정보가 묻힌다.
 
-    외부 라이브러리는 최상위 이름만 남긴다.
-    httpx.AsyncClient와 httpx.RequestError는 같은 라이브러리이므로
-    따로 세면 의존성이 실제보다 많아 보인다.
+    외부 라이브러리는 라이브러리 이름으로 묶는다. httpx.AsyncClient와
+    httpx.RequestError는 같은 라이브러리이므로 따로 세면 의존성이 실제보다
+    많아 보인다. 라이브러리 이름이 import의 어디에 있는지와 무엇이 표준인지는
+    언어마다 달라 청크 파일의 언어 설정(dependency_of)에 맡긴다. 파이썬처럼
+    첫 조각만 떼면 Java의 org.springframework가 org로 줄어 뜻이 사라진다.
 
     Args:
         chunks (list[Chunk]): 인덱싱된 청크 목록.
@@ -156,16 +151,22 @@ def split_dependencies(
     internal_count = 0
 
     for chunk in chunks:
+        spec = spec_for(chunk.file)
         for imp in chunk.imports:
             if is_internal_import(imp, module_names):
                 internal_count += 1
                 continue
 
-            top = imp.split(".")[0]
-            if top in STDLIB_NAMES:
-                stdlib.add(top)
+            # 코드 청크는 지원 언어 파일에서만 나오므로 spec이 있다.
+            # 없다면 이름을 알 수 없으니 목록에 섞지 않는다.
+            if spec is None:
+                continue
+
+            name, is_stdlib = spec.dependency_of(imp)
+            if is_stdlib:
+                stdlib.add(name)
             else:
-                third_party.add(top)
+                third_party.add(name)
 
     return sorted(third_party), sorted(stdlib), internal_count
 
@@ -258,8 +259,12 @@ def find_script_entries(root: Path) -> list[EntryPoint]:
 def find_code_entries(chunks: list[Chunk], root: Path) -> list[EntryPoint]:
     """코드와 파일 이름에서 진입점 후보를 추정한다.
 
-    __main__ 블록은 tree-sitter 청킹 대상이 아니라 청크에 남지 않으므로
-    파일 본문을 직접 확인한다.
+    무엇을 실행 가능한 근거로 볼지는 언어마다 달라 언어 설정(entry_evidence)에
+    맡긴다. 파이썬은 __main__ 블록, Java는 main 메서드다. 둘 다 청크에 남지
+    않는 자리라 파일 본문을 직접 확인한다.
+
+    파일 이름 관례(ENTRY_FILENAMES)는 파이썬 이름들이라 Java 파일에는 걸리지
+    않는다.
 
     Args:
         chunks (list[Chunk]): 인덱싱된 청크 목록.
@@ -278,11 +283,11 @@ def find_code_entries(chunks: list[Chunk], root: Path) -> list[EntryPoint]:
         except OSError:
             source = ""
 
-        if '__name__ == "__main__"' in source or "__name__ == '__main__'" in source:
-            found[file_path] = EntryPoint(
-                target=file_path,
-                evidence="__main__ 블록이 있어 직접 실행 가능",
-            )
+        spec = spec_for(file_path)
+        evidence = spec.entry_evidence(source) if spec else None
+
+        if evidence:
+            found[file_path] = EntryPoint(target=file_path, evidence=evidence)
         elif name in ENTRY_FILENAMES:
             found[file_path] = EntryPoint(
                 target=file_path,

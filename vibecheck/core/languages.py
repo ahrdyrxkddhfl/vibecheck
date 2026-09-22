@@ -22,6 +22,8 @@ from vibecheck.core.parser import (
     FUNCTION_TYPES,
     PY_LANGUAGE,
     collect_calls,
+    dependency_name,
+    entry_evidence,
     extract_imports,
     extract_module_docstring,
 )
@@ -33,7 +35,8 @@ class LanguageSpec:
     """언어 하나를 읽는 데 필요한 것을 묶는다.
 
     Attributes:
-        name (str): 언어 이름. 표시와 구분에 쓴다.
+        name (str): 언어 이름. 구분에 쓴다.
+        label (str): 화면에 보일 이름.
         extensions (frozenset[str]): 이 언어로 볼 확장자.
         language (Language): tree-sitter 문법.
         class_types (frozenset[str]): 클래스로 볼 노드 타입. 그 안의 정의는 메서드가 된다.
@@ -41,6 +44,11 @@ class LanguageSpec:
         extract_imports (Callable): 루트 노드와 소스를 받아 import 이름 목록을 돌려준다.
         extract_docstring (Callable): 루트 노드와 소스를 받아 파일 설명을 돌려준다.
             없으면 None.
+        dependency_of (Callable): 외부 import 이름을 받아 (의존성 목록에 올릴 이름,
+            표준 라이브러리인지)를 돌려준다. 라이브러리 이름이 import의 어디에
+            있는지가 언어마다 다르다.
+        entry_evidence (Callable): 파일 원문을 받아 직접 실행할 수 있다는 근거
+            문장을 돌려준다. 없으면 None.
         doc_comment (bytes | None): 선언 바로 앞에 붙어 그 선언의 설명이 되는
             주석의 시작 표시. 설명이 선언 본문 안에 있는 언어는 None이다.
         collect_calls (Callable | None): 루트 노드와 소스를 받아 호출 목록을 돌려준다.
@@ -50,35 +58,44 @@ class LanguageSpec:
     """
 
     name: str
+    label: str
     extensions: frozenset[str]
     language: Language
     class_types: frozenset[str]
     function_types: frozenset[str]
     extract_imports: Callable[[object, bytes], list[str]]
     extract_docstring: Callable[[object, bytes], str | None]
+    dependency_of: Callable[[str], tuple[str, bool]]
+    entry_evidence: Callable[[str], str | None]
     doc_comment: bytes | None = None
     collect_calls: Callable[[object, bytes], list[CallSite]] | None = None
 
 
 PYTHON = LanguageSpec(
     name="python",
+    label="파이썬",
     extensions=frozenset({".py"}),
     language=PY_LANGUAGE,
     class_types=CLASS_TYPES,
     function_types=FUNCTION_TYPES,
     extract_imports=extract_imports,
     extract_docstring=extract_module_docstring,
+    dependency_of=dependency_name,
+    entry_evidence=entry_evidence,
     collect_calls=collect_calls,
 )
 
 JAVA = LanguageSpec(
     name="java",
+    label="Java",
     extensions=frozenset({".java"}),
     language=java.JAVA_LANGUAGE,
     class_types=java.CLASS_TYPES,
     function_types=java.FUNCTION_TYPES,
     extract_imports=java.extract_imports,
     extract_docstring=java.extract_file_doc,
+    dependency_of=java.dependency_name,
+    entry_evidence=java.entry_evidence,
     doc_comment=java.DOC_COMMENT_PREFIX,
 )
 

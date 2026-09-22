@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from vibecheck.core.collector import collect_files
+from vibecheck.core.languages import LANGUAGES
 from vibecheck.core.overview import build_overview
 from vibecheck.core.quirks import find_quirks, group_quirks
 from vibecheck.llm.anthropic import AnthropicClient
@@ -75,7 +76,7 @@ def get_overview(repo: RepoPath, index: Index) -> dict:
             (청크, 벡터 저장소 경로, 건너뛴 수, 인덱싱 조건).
 
     Returns:
-        dict: 개요 필드와 `stale_count`, `index_meta`.
+        dict: 개요 필드와 `stale_count`, `languages`, `index_meta`.
     """
     chunks, _chroma_dir, stale, meta = index
 
@@ -101,6 +102,10 @@ def get_overview(repo: RepoPath, index: Index) -> dict:
     ]
 
     data["stale_count"] = stale
+
+    # 제외 문구 뒤에 "무엇만 분석하는지"를 붙이는 재료다. 화면에 언어 이름을
+    # 적어두면 언어를 더할 때 화면만 옛말을 하게 된다.
+    data["languages"] = [spec.label for spec in LANGUAGES]
 
     # 언제 어떤 조건으로 인덱싱됐는지를 화면에서 보여줄 수 있어야 한다.
     # 숫자가 이상할 때 "인덱스가 오래됐나"를 먼저 의심할 근거가 된다.
