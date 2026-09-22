@@ -6,6 +6,7 @@
 일어나게 한다. CLI가 같은 예외를 화면 출력으로 바꾸던 자리의 대응물이다.
 """
 
+import shlex
 from pathlib import Path
 from typing import Annotated
 
@@ -61,6 +62,11 @@ def get_index(repo: RepoPath) -> tuple:
     다르기 때문이다. 전자는 `whyd index`를 돌려야 하고, 후자는 인덱싱은
     됐으나 수집된 청크가 없는 상태라 대상·제외 설정을 의심해야 한다.
 
+    예외에는 경로만 담겨 있어 그대로 보내면 화면에 경로 한 줄만 뜬다.
+    인덱스가 없는 레포를 열었을 때 실제로 그렇게 떠서, 무엇이 잘못됐는지도
+    무엇을 하면 되는지도 알 수 없었다. CLI(open_or_exit)가 같은 예외에 붙이는
+    안내를 여기서도 붙인다.
+
     Args:
         repo: `resolve_repo_path`가 정규화한 레포 경로.
 
@@ -70,12 +76,23 @@ def get_index(repo: RepoPath) -> tuple:
     Raises:
         HTTPException: 인덱스가 없으면 404, 비어 있으면 409.
     """
+    command = f"whyd index {shlex.quote(str(repo))}"
+
     try:
         return open_index(repo)
     except IndexNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=404,
+            detail=f"인덱스가 없습니다: {repo}. 먼저 인덱싱하세요:  {command}",
+        ) from exc
     except IndexEmpty as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "인덱스가 비어 있습니다. 인덱싱은 됐지만 청크가 하나도 없습니다. "
+                f"대상 경로와 제외 폴더를 확인한 뒤 다시 인덱싱하세요:  {command}"
+            ),
+        ) from exc
 
 
 Index = Annotated[tuple, Depends(get_index)]
