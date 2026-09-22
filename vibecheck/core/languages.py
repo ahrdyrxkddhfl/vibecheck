@@ -54,6 +54,9 @@ class LanguageSpec:
         type_named_files (bool): 최상위 타입 이름이 곧 파일 이름이라는 것이 언어
             규칙인가. 참이면 채점이 답변의 클래스 이름만으로 그 파일을 근거로
             가져온다. 규칙이 없는 언어에서 이름으로 파일을 짐작하면 틀린 근거가 된다.
+        collect_type_refs (Callable | None): 루트 노드와 소스를 받아 코드에 나온 타입
+            이름과 횟수를 돌려준다. 호출을 수집하지 않는 언어에서 관계도가 파일을
+            잇는 재료다. type_named_files가 참이어야 이름에서 파일이 정해진다.
         collect_calls (Callable | None): 루트 노드와 소스를 받아 호출 목록을 돌려준다.
             None이면 그 언어는 호출 그래프를 만들지 않는다. 호출을 이름만으로
             해석하는 규칙이 언어마다 달라, 규칙이 없는 언어에서 억지로 이으면
@@ -72,6 +75,7 @@ class LanguageSpec:
     entry_evidence: Callable[[str], str | None]
     doc_comment: bytes | None = None
     type_named_files: bool = False
+    collect_type_refs: Callable[[object, bytes], dict[str, int]] | None = None
     collect_calls: Callable[[object, bytes], list[CallSite]] | None = None
 
 
@@ -102,6 +106,7 @@ JAVA = LanguageSpec(
     entry_evidence=java.entry_evidence,
     doc_comment=java.DOC_COMMENT_PREFIX,
     type_named_files=True,
+    collect_type_refs=java.type_references,
 )
 
 LANGUAGES: tuple[LanguageSpec, ...] = (PYTHON, JAVA)

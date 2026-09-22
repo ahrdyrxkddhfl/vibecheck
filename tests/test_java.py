@@ -147,3 +147,45 @@ def test_클래스_이름만_써도_java_파일을_가져온다():
         "src/service/RuleEvaluator.java",
         "src/domain/Claim.java",
     ]
+
+
+def test_관계도는_java_파일을_타입_참조로_잇는다(tmp_path):
+    """import 없이 쓰는 같은 패키지 클래스와 정적 멤버 호출도 연결로 잡는다.
+
+    Java는 호출을 수집하지 않으므로 관계도가 비어 있었다. 코드에 나온 클래스
+    이름으로 파일을 잇는다. 이름이 두 파일에 걸리는 클래스는 짐작하지 않고,
+    주석에만 나온 이름은 세지 않는다.
+    """
+    from vibecheck.models import Chunk
+    from vibecheck.services.relations import file_relations
+
+    files = {
+        "a/Service.java": (
+            "class Service {\n"
+            "  private Repo repo;            // 같은 패키지, import 없음\n"
+            "  void run() { Codes.check(); } // 정적 멤버\n"
+            "  /* Ghost 는 주석이라 세지 않는다 */\n"
+            "  Dup dup;\n"
+            "}\n"
+        ),
+        "a/Repo.java": "class Repo {}\n",
+        "a/Codes.java": "class Codes { static void check() {} }\n",
+        "a/Ghost.java": "class Ghost {}\n",
+        "a/Dup.java": "class Dup {}\n",
+        "b/Dup.java": "class Dup {}\n",
+        "a/Controller.java": "class Controller { Service s = new Service(); }\n",
+    }
+    chunks = []
+    for rel, code in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(code, encoding="utf-8")
+        name = path.stem
+        chunks.append(Chunk(file=rel, symbol=rel, kind="file", start_line=1, end_line=1, code=""))
+        chunks.append(Chunk(file=rel, symbol=name, kind="class", start_line=1, end_line=1, code=""))
+
+    rel = file_relations(chunks, "a/Service.java", tmp_path)
+
+    assert rel["relation"] == "types"
+    assert sorted(n["file"] for n in rel["calls"]) == ["a/Codes.java", "a/Repo.java"]
+    assert [n["file"] for n in rel["called_by"]] == ["a/Controller.java"]

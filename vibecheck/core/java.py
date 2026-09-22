@@ -9,6 +9,7 @@ import 방식에 맞춰져 있고, Java는 오버로딩과 인터페이스 주�
 """
 
 import re
+from collections import Counter
 
 import tree_sitter_java as tsjava
 from tree_sitter import Language
@@ -227,3 +228,54 @@ def entry_evidence(source: str) -> str | None:
     if "@SpringBootApplication" in source:
         evidence += ", @SpringBootApplication"
     return evidence
+
+
+def type_references(root_node, source: bytes) -> Counter:
+    """파일 코드에 나온 타입 이름과 그 횟수를 센다.
+
+    관계도가 Java 파일을 잇는 재료다. 호출은 이름만으로 어느 구현인지 좁혀지지
+    않지만, 어떤 타입을 쓰는지는 이름이 곧 파일이라 정해진다. EvidenceService에
+    EvidenceRepository 필드가 있으면 EvidenceService가 그 파일을 쓰는 것이다.
+
+    import가 아니라 코드를 본다. 같은 패키지의 클래스는 import 없이 쓰므로
+    import만 보면 그 연결이 빠진다. claim-trace에서 import로 잡은 연결 208건은
+    모두 여기에도 잡혔고, 여기서만 잡힌 것이 44건 더 있었다. 거의 다 domain
+    패키지 엔티티끼리의 연관관계였다.
+
+    두 자리를 센다. 타입이 쓰이는 자리(필드, 매개변수, 제네릭, new)는 문법이
+    type_identifier로 표시한다. ErrorCode.NOT_FOUND나 Evidence.fromRule(...)처럼
+    클래스 이름으로 정적 멤버를 부르는 자리는 문법상 그냥 이름(identifier)이라,
+    메서드 호출과 필드 접근의 앞쪽에 놓인 이름을 따로 센다. 이름이 대문자로
+    시작하지 않으면 변수라서 뺀다.
+
+    주석과 문자열 안의 이름은 세지 않는다. 트리에서 그 자리는 이름 노드가 아니다.
+
+    Args:
+        root_node: tree-sitter가 파싱한 루트 노드.
+        source (bytes): 원본 소스 바이트.
+
+    Returns:
+        Counter: 타입 이름 -> 나온 횟수.
+    """
+    counts: Counter = Counter()
+
+    def walk(node) -> None:
+        """트리를 훑으며 타입 이름을 센다."""
+        if node.type == "type_identifier":
+            counts[text(node, source)] += 1
+        elif node.type == "identifier":
+            parent = node.parent
+            if (
+                parent is not None
+                and parent.type in ("method_invocation", "field_access")
+                and parent.child_by_field_name("object") == node
+            ):
+                name = text(node, source)
+                if name[:1].isupper():
+                    counts[name] += 1
+
+        for child in node.children:
+            walk(child)
+
+    walk(root_node)
+    return counts

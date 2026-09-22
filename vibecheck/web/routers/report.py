@@ -176,7 +176,7 @@ def get_interview(repo: RepoPath, index: Index) -> dict:
     }
 
 @router.get("/relations")
-def get_relations(index: Index, file: str) -> dict:
+def get_relations(repo: RepoPath, index: Index, file: str) -> dict:
     """파일 하나를 가운데 둔 호출 관계를 반환한다. LLM을 부르지 않는다.
 
     관계도 화면이 파일을 누를 때마다 부른다. 레포 전체 관계를 한 번에
@@ -186,7 +186,11 @@ def get_relations(index: Index, file: str) -> dict:
     인덱싱 시점의 관계라는 것을 잊으면 안 된다. 인덱싱 뒤에 코드를 고치면
     새로 생긴 호출은 여기 없다. 그래서 개요처럼 `stale_count`를 싣는다.
 
+    Java처럼 호출 대신 타입 참조로 잇는 언어는 파일을 읽어야 해서 레포 경로를
+    함께 넘긴다. 그 연결은 인덱싱 시점이 아니라 지금 디스크의 코드 기준이다.
+
     Args:
+        repo: 정규화된 레포 경로.
         index: `open_index()`의 반환값.
         file: 가운데 둘 파일의 레포 기준 상대 경로.
 
@@ -198,7 +202,7 @@ def get_relations(index: Index, file: str) -> dict:
     """
     chunks, _chroma_dir, stale, _meta = index
 
-    data = file_relations(chunks, file)
+    data = file_relations(chunks, file, repo)
     if data is None:
         # 경로 오타와 "정의가 없는 파일"(__init__.py 등)을 구분하지 않는다.
         # 어느 쪽이든 그릴 것이 없다는 점은 같고, 사용자가 할 일도 같다.

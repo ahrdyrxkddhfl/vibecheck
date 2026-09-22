@@ -631,7 +631,7 @@ function render(d) {
       // 접힌 상태에서도 왜 전부 추정인지 읽혀야 한다.
     if (!confirmed.length) {
       entryNodes.push(el("div", "fnote",
-        "확정할 수 있는 진입점이 없습니다. 아래는 파일 이름과 코드 관례로 추정한 것입니다."));
+        "pyproject.toml에 등록된 명령이 없습니다. 아래는 파일 이름과 코드 관례로 추정한 것입니다."));
     }
     entryNodes.push(...confirmed.map(entryRow));
 
@@ -928,6 +928,18 @@ const GRAPH_NOTE =
   "어느 정의인지 이름만으로 정하지 못한 호출은 빠져 있습니다. " +
   "파일을 누르면 그 파일이 가운데로 옵니다.";
 
+/**
+ * 타입 참조로 이은 그림 위에 늘 붙이는 안내.
+ *
+ * 호출 관계와 모양이 같아 모르고 보면 "이 파일이 저 파일의 메서드를 부른다"로
+ * 읽힌다. 실제로는 코드에 그 클래스 이름이 나온다는 뜻이고, 메서드 단위 호출은
+ * 재지 않는다. 무엇을 잰 그림인지 그림 위에서 밝힌다.
+ */
+const TYPE_NOTE =
+  "코드에 나온 클래스 이름으로 이은 그림입니다. 필드·매개변수·new·정적 멤버로 " +
+  "쓰면 연결로 봅니다. 메서드 단위 호출은 분석하지 않습니다. " +
+  "파일을 누르면 그 파일이 가운데로 옵니다.";
+
 let graphRepo = "";
 let fetchSeq = 0;
 let renderSeq = 0;
@@ -1004,10 +1016,10 @@ async function showFile(path) {
     const rel = await body(await fetch("/api/relations" + query));
     if (my !== fetchSeq) return;
 
-    // 호출을 수집하지 않는 언어다. "부르는 파일 0개"라고 쓰면 아무와도 연결이
+    // 파일을 잇지 않는 언어다. "부르는 파일 0개"라고 쓰면 아무와도 연결이
     // 없는 파일로 읽힌다. 재지 않은 것과 없는 것을 구분해 말하고, 그림 자리는
     // 비운 채 함수 목록만 보여준다.
-    if (!rel.calls_analyzed) {
+    if (!rel.relation) {
       $("gnote").replaceChildren(
         el("div", null,
           rel.language + " 파일은 호출 관계를 분석하지 않습니다. "
@@ -1019,11 +1031,14 @@ async function showFile(path) {
       return;
     }
 
+    // 호출로 이었는지 타입 참조로 이었는지에 따라 동사와 안내가 달라진다.
+    const types = rel.relation === "types";
+    const verb = types ? "쓰는" : "부르는";
     $("gnote").replaceChildren(
       el("div", null,
-        "← 이 파일을 부르는 파일 " + rel.called_by.length + "개 · "
-        + "이 파일이 부르는 파일 " + rel.calls.length + "개 →"),
-      el("div", null, GRAPH_NOTE),
+        "← 이 파일을 " + verb + " 파일 " + rel.called_by.length + "개 · "
+        + "이 파일이 " + verb + " 파일 " + rel.calls.length + "개 →"),
+      el("div", null, types ? TYPE_NOTE : GRAPH_NOTE),
     );
     await drawNeighbors(rel, { left: false, right: false });
     drawSymbols(rel);
@@ -1086,7 +1101,11 @@ async function drawNeighbors(rel, open) {
   box.className = "graph";
 
   if (!rel.called_by.length && !rel.calls.length) {
-    box.replaceChildren(el("div", "empty", "다른 파일과 주고받는 호출이 없습니다."));
+    // 조사가 달라 문장을 통째로 고른다(참조가 / 호출이).
+    const none = rel.relation === "types"
+      ? "다른 파일과 주고받는 참조가 없습니다."
+      : "다른 파일과 주고받는 호출이 없습니다.";
+    box.replaceChildren(el("div", "empty", none));
     return;
   }
 
