@@ -41,6 +41,101 @@ def build_context(chunks: list[Chunk]) -> str:
         )
     return "\n\n".join(blocks)
 
+CODE_KINDS = ("file", "function", "method", "class")
+"""줄 범위로 코드를 담는 청크 종류. 문서와 설정 청크는 범위가 겹쳐도 코드 중복이 아니다."""
+
+
+def covers(outer: Chunk, inner: Chunk, file_is_code: bool = True) -> bool:
+    """outer가 inner의 코드를 통째로 담고 있는지 판정한다.
+
+    같은 파일에서 inner의 줄 범위가 outer의 줄 범위 안에 들어가면 inner의 코드는
+    outer에 이미 실려 있다. 클래스와 그 메서드, 파일 원문과 그 안의 함수가 이 경우다.
+
+    채점처럼 파일 청크를 개요로 줄여 보내는 곳에서는 파일 청크가 코드를 담지 않는다.
+    그때는 file_is_code를 False로 넘겨 파일 청크를 이 판정에서 뺀다.
+
+    Args:
+        outer (Chunk): 담는 쪽 후보.
+        inner (Chunk): 담기는 쪽 후보.
+        file_is_code (bool): 파일 청크가 원문 그대로 실리는지.
+
+    Returns:
+        bool: outer가 inner를 담으면 True. 같은 청크면 False.
+    """
+    if outer is inner or outer.file != inner.file:
+        return False
+    if outer.kind not in CODE_KINDS or inner.kind not in CODE_KINDS:
+        return False
+    if not file_is_code and "file" in (outer.kind, inner.kind):
+        return False
+    return outer.start_line <= inner.start_line and inner.end_line <= outer.end_line
+
+
+def drop_contained(chunks: list[Chunk], file_is_code: bool = True) -> list[Chunk]:
+    """다른 청크 안에 통째로 들어 있는 청크를 빼고, 담는 쪽을 남긴다.
+
+    근거 목록에 클래스와 그 메서드가 함께 뽑히면 메서드 코드가 두 번 실린다.
+    이 레포와 claim-trace로 질문 여섯 개를 재니 셋에서 이런 겹침이 생겼고, 생기면
+    근거 8칸 중 2~4칸이 이미 실린 코드였다. 근거 수는 고정이라 그만큼 다른 근거가
+    들어갈 자리를 잃는다.
+
+    담는 쪽을 남긴다. 안쪽 코드를 이미 다 담고 있어 잃는 정보가 없다. 반대로 하면
+    담는 쪽에만 있던 코드(뽑히지 않은 다른 메서드, 필드)를 잃는다.
+
+    담는 쪽이 뒤에 나오면 안쪽 중 가장 앞의 자리에 넣는다. 앞에 올수록 관련이 깊다고
+    고른 순서라, 맨 뒤로 보내면 그 판단을 뒤집게 된다.
+
+    Args:
+        chunks (list[Chunk]): 관련 순으로 정렬된 근거 후보.
+        file_is_code (bool): 파일 청크가 원문 그대로 실리는지. covers 참고.
+
+    Returns:
+        list[Chunk]: 겹침을 없앤 목록. 순서는 위의 규칙대로다.
+    """
+    kept: list[Chunk] = []
+
+    for chunk in chunks:
+        if any(covers(k, chunk, file_is_code) for k in kept):
+            continue
+
+        inside = [i for i, k in enumerate(kept) if covers(chunk, k, file_is_code)]
+        if inside:
+            at = inside[0]
+            kept = [k for i, k in enumerate(kept) if i not in inside]
+            kept.insert(at, chunk)
+        else:
+            kept.append(chunk)
+
+    return kept
+
+
+def pick_distinct(
+    picked: list[Chunk], candidates: list[Chunk], top_k: int
+) -> list[Chunk]:
+    """재정렬이 고른 것에서 겹침을 빼고, 모자라면 나머지 후보로 채워 top_k개를 만든다.
+
+    재정렬에게 몇 개 더 고르게 해도 칸이 모자랄 수 있다. 재정렬이 한두 파일 안에서만
+    고르면 더 고른 것까지 같은 클래스의 메서드라 겹침으로 함께 빠진다. claim-trace의
+    "개입 규칙은 어떻게 평가되나요?"에서 12개를 골랐는데 겹침을 빼니 4개가 남았다.
+
+    모자란 칸은 재정렬이 고르지 않은 후보를 검색 순서대로 이어 채운다. 재정렬이 고른
+    것은 순서 그대로 앞에 둔다. 후보는 top_k의 몇 배로 뽑아두므로 모자라지 않는다.
+
+    Args:
+        picked (list[Chunk]): 재정렬이 관련 순으로 고른 청크.
+        candidates (list[Chunk]): 재정렬에 넘긴 후보 전체. 검색 순서다.
+        top_k (int): 남길 청크 수.
+
+    Returns:
+        list[Chunk]: 서로 겹치지 않는 청크 top_k개. 후보가 모자라면 그보다 적다.
+    """
+    found = drop_contained(picked)
+    if len(found) < top_k:
+        rest = [c for c in candidates if all(c is not p for p in picked)]
+        found = drop_contained(found + rest)
+    return found[:top_k]
+
+
 KIND_QUOTAS = [
     (None, 4),
     (["file"], 2),
@@ -343,6 +438,14 @@ def search_by_kind(
 
     return found
 
+RERANK_SPARE = 4
+"""재정렬에게 top_k보다 더 고르게 할 수.
+
+재정렬이 고른 것 중에서 겹치는 청크를 빼고 top_k로 자른다. 딱 top_k만 고르게 하면
+겹침을 뺀 자리가 빈 채로 남는다. 빈 자리를 무엇으로 채울지도 재정렬의 판단을 따르려고
+미리 몇 개 더 고르게 한다. 재보니 겹침은 한 번에 최대 4칸이었다.
+"""
+
 CANDIDATE_MULTIPLIER = 4
 """재정렬에 넘길 후보를 top_k의 몇 배로 뽑을지.
 
@@ -471,7 +574,10 @@ def answer(
             LLM답변은 검증 가능해야 한다.
     """
     candidates = search_by_kind(question, chunks, store, top_k * CANDIDATE_MULTIPLIER)
-    found = rerank(question, candidates, llm, top_k)
+    # 겹치는 청크를 뺀 뒤 자르므로, 재정렬에게는 몇 개 더 고르게 한다.
+    # 그래도 모자라면 나머지 후보로 채운다(pick_distinct).
+    picked = rerank(question, candidates, llm, top_k + RERANK_SPARE)
+    found = pick_distinct(picked, candidates, top_k)
 
     if not found:
         return "관련된 코드를 찾지 못했습니다.", []

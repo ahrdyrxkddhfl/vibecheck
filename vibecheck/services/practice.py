@@ -30,7 +30,7 @@ from vibecheck.core.languages import spec_for, supported_extensions
 from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import AnswerFeedback, Chunk, ClaimCheck
-from vibecheck.services.qa import build_context
+from vibecheck.services.qa import build_context, covers
 from vibecheck.store.vector import VectorStore
 
 VERDICTS = {"confirmed", "contradicted", "unverifiable"}
@@ -294,6 +294,12 @@ def search_union(
     달라지는 것을 확인했으므로, 쿼리 방식만 바뀐 비교가 되려면
     근거 수는 그대로여야 한다.
 
+    이미 담은 청크 안에 통째로 들어 있는 청크는 담지 않고, 새로 담는 청크가 이미
+    담은 것을 품으면 그것들을 빼고 그 자리를 다음 후보로 채운다(qa.drop_contained와
+    같은 규칙). 클래스와 그 메서드가 함께 뽑혀 메서드 코드가 두 번 실리면 근거 칸만
+    차지한다. 파일 청크는 채점기에 개요로 줄여 보내므로 코드를 담은 것으로 치지 않는다.
+    칸이 비어도 채울 수 있도록 검색은 넉넉히 해두고 담을 만큼만 담는다.
+
     Args:
         question (str): 채점 대상 질문.
         user_answer (str): 사용자 답변. 검색 쿼리로도 쓴다.
@@ -315,24 +321,35 @@ def search_union(
     seen: set[str] = set()
 
     def take(chunk: Chunk | None) -> bool:
-        """근거에 하나를 더하고, 상한에 닿았는지 돌려준다."""
+        """근거에 하나를 더하고, 상한에 닿았는지 돌려준다.
+
+        이미 담은 것 안에 있으면 담지 않는다. 이미 담은 것을 품으면 그것을 뺀다.
+        """
         if chunk is None or chunk.id in seen:
             return False
         seen.add(chunk.id)
+
+        if any(covers(k, chunk, file_is_code=False) for k in found):
+            return False
+
+        found[:] = [k for k in found if not covers(chunk, k, file_is_code=False)]
         found.append(chunk)
         return len(found) >= top_k
 
     if question.strip():
-        for hit in store.search(question, top_k=question_k):
+        # 겹쳐서 건너뛰는 것이 있어도 질문 몫을 채울 수 있게 넉넉히 검색한다.
+        for hit in store.search(question, top_k=top_k):
             if take(by_id.get(hit["id"])):
                 return found
+            if len(found) >= question_k:
+                break
 
     if user_answer.strip():
         for chunk in find_mentioned_files(user_answer, chunks):
             if take(chunk):
                 return found
 
-        for hit in store.search(user_answer, top_k=top_k):
+        for hit in store.search(user_answer, top_k=top_k * 2):
             if take(by_id.get(hit["id"])):
                 return found
 
