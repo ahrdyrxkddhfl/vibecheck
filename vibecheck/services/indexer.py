@@ -20,14 +20,8 @@ from vibecheck.core.collector import (
     to_relative,
 )
 from vibecheck.core.summarizer import summarize_all
-from vibecheck.core.parser import (
-    collect_calls,
-    enclosing,
-    extract_imports,
-    extract_module_docstring,
-    parse_file,
-    walk,
-)
+from vibecheck.core.languages import spec_for
+from vibecheck.core.parser import enclosing, parse_file, walk
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import CallSite, Chunk, Symbol
 
@@ -90,10 +84,17 @@ def index_repo(
     imports_by_file: dict[str, list[str]] = {}
 
     for path in files:
-        tree, source = parse_file(str(path))
-        symbols = walk(tree.root_node, source)
-        docstring = extract_module_docstring(tree.root_node, source)
-        imports = extract_imports(tree.root_node, source)
+        # 수집기가 지원 확장자만 넘기므로 여기서 None이 나오지 않는다.
+        spec = spec_for(path)
+        tree, source = parse_file(str(path), spec.language)
+        symbols = walk(
+            tree.root_node,
+            source,
+            class_types=spec.class_types,
+            function_types=spec.function_types,
+        )
+        docstring = spec.extract_docstring(tree.root_node, source)
+        imports = spec.extract_imports(tree.root_node, source)
 
         rel = to_relative(path, root)
         text = source.decode()
@@ -104,7 +105,9 @@ def index_repo(
         # 어느 심볼에도 속하지 않는 호출은 붙일 자리가 없다. 청크가 심볼 단위다.
         calls_by_file[rel] = [
             (call, holder)
-            for call in collect_calls(tree.root_node, source)
+            for call in (
+                spec.collect_calls(tree.root_node, source) if spec.collect_calls else []
+            )
             if (holder := enclosing(symbols, call.line)) is not None
         ]
 

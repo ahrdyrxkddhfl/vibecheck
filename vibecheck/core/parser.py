@@ -11,16 +11,21 @@ tree-sitter로 소스를 문법 트리(AST)로 변환한 뒤, 트리를 순회�
 import tree_sitter_python as tspython
 from tree_sitter import Language, Node, Parser
 
-from vibecheck.models import Symbol
 from vibecheck.models import CallSite, Symbol
 
 PY_LANGUAGE = Language(tspython.language())
 
-TARGET_TYPES = {"function_definition", "class_definition"}
-"""추출 대상 노드 타입. 그 외 노드는 순회만 하고 수집하지 않는다."""
+CLASS_TYPES = frozenset({"class_definition"})
+"""파이썬에서 클래스로 볼 노드 타입. 그 안의 정의는 메서드가 된다."""
+
+FUNCTION_TYPES = frozenset({"function_definition"})
+"""파이썬에서 함수로 볼 노드 타입. 클래스 바로 안이면 메서드, 아니면 함수다.
+
+두 목록에 없는 노드는 순회만 하고 수집하지 않는다.
+"""
 
 
-def parse_file(path: str) -> tuple[object, bytes]:
+def parse_file(path: str, language: Language = PY_LANGUAGE) -> tuple[object, bytes]:
     """파일을 읽어 문법 트리로 변환한다.
 
     tree-sitter는 bytes 단위로 동작하므로 파일을 반드시 바이너리 모드로
@@ -29,6 +34,10 @@ def parse_file(path: str) -> tuple[object, bytes]:
 
     Args:
         path (str): 파싱할 소스 파일 경로.
+        language (Language): 쓸 tree-sitter 문법. 언어는 호출자가 고른다.
+            이 모듈은 지원 언어 목록(languages.py)을 모른다. 그 목록이
+            이 모듈의 파이썬용 함수를 가져다 쓰므로, 반대 방향까지 이으면
+            두 모듈이 서로를 import하게 된다.
 
     Returns:
         tuple[Tree, bytes]: 문법 트리와 원본 소스 바이트.
@@ -37,7 +46,7 @@ def parse_file(path: str) -> tuple[object, bytes]:
     """
     with open(path, "rb") as f:
         source = f.read()
-    parser = Parser(PY_LANGUAGE)
+    parser = Parser(language)
     return parser.parse(source), source
 
 
@@ -47,6 +56,8 @@ def walk(
     parent: str | None = None,
     results: list[Symbol] | None = None,
     parent_is_class: bool = False,
+    class_types: frozenset[str] = CLASS_TYPES,
+    function_types: frozenset[str] = FUNCTION_TYPES,
 ) -> list[Symbol]:
     """문법 트리를 재귀 순회하며 심볼을 수집한다.
 
@@ -55,7 +66,7 @@ def walk(
     가정하지 않고 재귀로 전체를 훑는다.
 
     소속 관계는 부모 이름을 자식에게 물려주는 방식으로 추적한다.
-    class_definition 노드를 만나면 그 이름을 하위 노드에 전달하므로,
+    클래스 노드를 만나면 그 이름을 하위 노드에 전달하므로,
     메서드는 자신이 어느 클래스에 속하는지 알 수 있다.
 
     부모의 종류를 이름과 따로 물려주는 이유는 이름만으로는 클래스인지
@@ -69,6 +80,9 @@ def walk(
     유용한 정보이고, extract_imports.scan 같은 표기가 이미 검색
     시험지의 기대값이다.
 
+    어떤 노드를 클래스와 함수로 볼지는 인자로 받는다. 순회와 소속 추적은
+    언어와 무관하고 노드 이름만 언어마다 다르다. 기본값은 파이썬이다.
+
     Args:
         node (Node): 현재 순회 중인 노드.
         source (bytes): 원본 소스. 노드 이름을 꺼낼 때 사용한다.
@@ -76,6 +90,8 @@ def walk(
         results (list[Symbol] | None): 수집 결과 누적 리스트.
             재귀 호출 간 공유되며, 최초 호출 시 None이면 새로 생성한다.
         parent_is_class (bool): 상위 심볼이 클래스인지 여부.
+        class_types (frozenset[str]): 클래스로 볼 노드 타입.
+        function_types (frozenset[str]): 함수로 볼 노드 타입.
 
     Returns:
         list[Symbol]: 파일 내 모든 함수·클래스 심볼. 소스 등장 순서를 따른다.
@@ -89,11 +105,12 @@ def walk(
     next_parent = parent
     next_is_class = parent_is_class
 
-    if node.type in TARGET_TYPES:
+    is_class = node.type in class_types
+    if is_class or node.type in function_types:
         name_node = node.child_by_field_name("name")
         name = source[name_node.start_byte : name_node.end_byte].decode()
 
-        if node.type == "class_definition":
+        if is_class:
             kind = "class"
         elif parent_is_class:
             kind = "method"
@@ -115,10 +132,18 @@ def walk(
 
         # 이 노드 자신이 심볼일 때만 자식에게 새 부모를 물려준다.
         next_parent = name
-        next_is_class = node.type == "class_definition"
+        next_is_class = is_class
 
     for child in node.children:
-        walk(child, source, next_parent, results, next_is_class)
+        walk(
+            child,
+            source,
+            next_parent,
+            results,
+            next_is_class,
+            class_types,
+            function_types,
+        )
 
     return results
 

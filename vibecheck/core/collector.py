@@ -8,11 +8,13 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-EXTENSIONS = {".py"}
+from vibecheck.core.languages import supported_extensions
+
+EXTENSIONS = supported_extensions()
 """수집 대상 확장자.
 
-현재는 파이썬만 지원한다. 다른 언어는 tree-sitter 문법 모듈이 추가로 필요하므로,
-파서가 처리할 수 있는 범위와 일치시킨다.
+지원 언어 목록(languages.py)에서 만든다. 파서가 읽을 수 있는 범위와
+수집 범위가 따로 적혀 있으면, 언어를 더할 때 한쪽만 고쳐 조용히 어긋난다.
 """
 
 EXCLUDE_DIRS = {
