@@ -91,6 +91,9 @@ whyd index ./my-repo
 인덱스는 대상 레포 안의 `.vibecheck/`에 저장됩니다.
 레포마다 자기 인덱스를 갖게 되어 다른 레포의 코드가 섞이지 않습니다.
 
+요약은 파일마다 동시에 4개씩 보냅니다. 큰 레포는 몇 분 걸릴 수 있는데,
+중간에 끊어도 그때까지 요약한 것은 저장되어 다시 인덱싱하면 이어서 합니다.
+
 특정 폴더를 빼려면:
 
 ```bash
@@ -228,7 +231,8 @@ whyd serve ./my-repo
 환각 0건. 답할 수 없을 때는 무엇이 없어서 답할 수 없는지를 밝혔습니다.
 
 측정 과정과 원자료는 [`experiments/`](experiments/)에 있습니다.
-Java 지원을 더할 때 파이썬 결과가 바뀌지 않았는지 확인한 과정은 [`experiments/java_support.md`](experiments/java_support.md)에 있습니다.
+Java 지원을 더할 때 파이썬 결과가 바뀌지 않았는지 확인한 과정은 [`experiments/java_support.md`](experiments/java_support.md)에,
+인덱싱 중단·재개와 요약 속도를 잰 과정은 [`experiments/indexing_resume_and_speed.md`](experiments/indexing_resume_and_speed.md)에 있습니다.
 
 ## 알려진 한계
 
