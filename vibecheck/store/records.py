@@ -291,6 +291,33 @@ def list_answers(conn: sqlite3.Connection, repo_id: int, limit: int = 20) -> lis
     ).fetchall()
 
 
+def claims_for(conn: sqlite3.Connection, answer_ids: list[int]) -> dict[int, list]:
+    """여러 답변의 주장을 한 번에 꺼내 답변별로 묶는다.
+
+    답변마다 따로 조회하면 기록 화면 한 번에 쿼리가 답변 수만큼 나간다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+        answer_ids (list[int]): 답변 id 목록.
+
+    Returns:
+        dict[int, list]: 답변 id -> claim 행 목록. 저장된 순서를 지킨다.
+    """
+    if not answer_ids:
+        return {}
+
+    marks = ", ".join("?" for _ in answer_ids)
+    rows = conn.execute(
+        f"SELECT * FROM claims WHERE answer_id IN ({marks}) ORDER BY id",
+        answer_ids,
+    ).fetchall()
+
+    grouped: dict[int, list] = {}
+    for r in rows:
+        grouped.setdefault(r["answer_id"], []).append(r)
+    return grouped
+
+
 def verdict_summary(conn: sqlite3.Connection, repo_id: int) -> dict:
     """주장 판정을 종류별로 센다.
 

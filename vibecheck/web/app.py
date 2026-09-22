@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from vibecheck.web.routers import report
+from vibecheck.web.routers import history, report
 
 STATIC_DIR = Path(__file__).parent / "static"
 """화면 파일이 있는 디렉터리.
@@ -28,6 +28,7 @@ app = FastAPI(
 )
 
 app.include_router(report.router, prefix="/api", tags=["report"])
+app.include_router(history.router, prefix="/api", tags=["history"])
 
 @app.middleware("http")
 async def revalidate_static(request, call_next):

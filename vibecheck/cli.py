@@ -34,6 +34,7 @@ from vibecheck.services.index_access import (
     load_index_meta,
     open_index,
 )
+from vibecheck.services.history import tally
 from vibecheck.services.indexer import index_repo
 from vibecheck.services.interview import build_questions, format_questions
 from vibecheck.services.practice import grade
@@ -504,30 +505,17 @@ def history(
         total = a["specificity"] + a["calibration"] + a["groundedness"]
         typer.echo(f"  {date}  {total}/6  {a['question_text'][:45]}")
 
-    confirmed = summary.get("confirmed:0", 0) + summary.get("confirmed:1", 0)
-    asserted = summary.get("unverifiable:0", 0) + summary.get("contradicted:0", 0)
-    hedged = summary.get("unverifiable:1", 0) + summary.get("contradicted:1", 0)
+    # 세 숫자와 경향 한 줄은 웹 기록 화면과 같은 계산을 쓴다(services.history).
+    t = tally(summary)
 
     typer.secho("\n주장 판정 누적", fg=typer.colors.CYAN, bold=True)
-    typer.secho(f"  코드로 확인됨       {confirmed}회", fg=typer.colors.GREEN)
-    typer.secho(f"  근거 없이 단정      {asserted}회", fg=typer.colors.RED)
-    typer.secho(f"  근거 없음을 밝힘    {hedged}회", fg=typer.colors.GREEN)
+    typer.secho(f"  코드로 확인됨       {t.confirmed}회", fg=typer.colors.GREEN)
+    typer.secho(f"  근거 없이 단정      {t.asserted}회", fg=typer.colors.RED)
+    typer.secho(f"  근거 없음을 밝힘    {t.hedged}회", fg=typer.colors.GREEN)
 
-    # 비율로 한 줄 짚어준다. 숫자만 보면 자기 경향을 알아채지 못한다.
-    unverified = asserted + hedged
-    if unverified >= 3:
-        rate = asserted / unverified
-        if rate >= 0.7:
-            typer.secho(
-                "\n코드에 근거가 없는 내용을 대부분 단정하고 있습니다. "
-                "면접에서 되물으면 무너지는 지점입니다.",
-                fg=typer.colors.RED,
-            )
-        elif rate <= 0.3:
-            typer.secho(
-                "\n확인할 수 없는 것을 밝히는 습관이 자리잡았습니다.",
-                fg=typer.colors.GREEN,
-            )
+    if t.note:
+        color = typer.colors.RED if t.tone == "warn" else typer.colors.GREEN
+        typer.secho("\n" + t.note, fg=color)
 
     if risky:
         typer.secho("\n근거 없이 단정한 주장", fg=typer.colors.CYAN, bold=True)
