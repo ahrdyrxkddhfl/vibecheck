@@ -18,12 +18,14 @@
 답변이 무엇이든 근거의 절반은 질문 기준으로 채워진다.
 """
 
-import ast
 import json
 import re
 from dataclasses import replace
 
+from tree_sitter import Parser
+
 from vibecheck.core.chunker import to_file_chunk
+from vibecheck.core.languages import spec_for, supported_extensions
 from vibecheck.prompts import load_prompt
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import AnswerFeedback, Chunk, ClaimCheck
@@ -158,12 +160,20 @@ def parse_feedback(
         ],
     )
 
-PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_./-])[A-Za-z0-9_][A-Za-z0-9_./-]*\.py(?![A-Za-z0-9_])")
-"""답변에서 파이썬 파일 경로를 떼어내는 무늬.
+PATH_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_./-])[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:"
+    + "|".join(sorted(re.escape(ext.lstrip(".")) for ext in supported_extensions()))
+    + r")(?![A-Za-z0-9_])"
+)
+"""답변에서 소스 파일 경로를 떼어내는 무늬.
 
 "cli.py"처럼 이름만 쓴 것과 "web/routers/report.py"처럼 경로를 쓴 것을 모두 잡는다.
 뒤쪽 경계를 \b로 두지 않는 이유는 한글 조사다. 파이썬 정규식은 한글을 글자로
 보므로 "cli.py가"에서 y와 가 사이에 경계가 없다고 판단해 통째로 놓친다.
+
+확장자는 지원 언어 목록에서 만든다. .py만 적어두면 Java 답변이 짚은
+"RuleEvaluator.java"를 못 잡아, 파이썬에서 고친 확인불가 문제가 Java에서
+그대로 되살아난다.
 """
 
 
@@ -191,7 +201,7 @@ def find_mentioned_files(user_answer: str, chunks: list[Chunk]) -> list[Chunk]:
     Returns:
         list[Chunk]: 답변에 처음 나온 순서대로 정렬한 파일 청크 목록.
     """
-    file_chunks = [c for c in chunks if c.kind == "file" and c.file.endswith(".py")]
+    file_chunks = [c for c in chunks if c.kind == "file" and spec_for(c.file)]
 
     found: list[Chunk] = []
     seen: set[str] = set()
@@ -305,24 +315,30 @@ def compact_file_chunk(chunk: Chunk, chunks: list[Chunk]) -> Chunk:
     파일 청크는 모듈 지도, 리포트, 면접 질문, 질의응답에서도 쓰이므로
     복원을 바꾸면 그 전부를 다시 확인해야 한다. 잰 것은 채점뿐이다.
 
+    지원 언어의 파일 청크면 모두 줄인다. 파일 설명은 인덱싱 때 파일 청크를 만든
+    것과 같은 함수(언어 설정의 extract_docstring)로 다시 꺼낸다. 파이썬 ast로
+    따로 꺼내면 Java는 설명을 잃고, 파이썬도 인덱스의 개요와 채점기가 보는 개요가
+    다른 함수로 만들어진다.
+
     Args:
-        chunk (Chunk): 근거 청크 하나. 파이썬 파일 청크가 아니면 그대로 돌려준다.
+        chunk (Chunk): 근거 청크 하나. 지원 언어의 파일 청크가 아니면 그대로 돌려준다.
         chunks (list[Chunk]): 인덱싱된 전체 청크. 같은 파일의 심볼을 찾는 데 쓴다.
 
     Returns:
         Chunk: 코드 자리를 개요와 호출 목록으로 바꾼 사본, 또는 원래 청크.
     """
-    if chunk.kind != "file" or not chunk.file.endswith(".py"):
+    spec = spec_for(chunk.file)
+    if chunk.kind != "file" or spec is None:
         return chunk
 
     members = [c for c in chunks if c.file == chunk.file and c.kind in L2_KINDS]
 
-    # 복원된 파일 청크의 코드 자리가 지금은 원문이므로 거기서 모듈 독스트링을
-    # 다시 꺼낸다. 원문이 파싱되지 않으면 독스트링 없이 조립한다.
-    try:
-        docstring = ast.get_docstring(ast.parse(chunk.code))
-    except SyntaxError:
-        docstring = None
+    # 복원된 파일 청크의 코드 자리가 지금은 원문이므로 거기서 파일 설명을
+    # 다시 꺼낸다. tree-sitter는 문법 오류가 있어도 트리를 돌려주므로,
+    # 설명 자리가 온전하면 그대로 꺼내고 아니면 None이 나온다.
+    source = chunk.code.encode()
+    tree = Parser(spec.language).parse(source)
+    docstring = spec.extract_docstring(tree.root_node, source)
 
     rebuilt = to_file_chunk(
         members,

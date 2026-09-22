@@ -99,3 +99,19 @@ def test_파일_설명과_import를_뽑는다(tmp_path):
         "org.junit.Assert.assertEquals",
         "com.example.domain",
     ]
+
+
+def test_답변이_짚은_java_파일을_잡는다():
+    """채점이 답변 속 .java 경로를 파일 근거로 가져오려면 먼저 잡혀야 한다.
+
+    경로 무늬가 .py만 알던 때는 Java 답변이 파일을 정확히 짚어도 근거를
+    가져오지 못했다. 한글 조사가 바로 붙는 경우도 함께 본다.
+    """
+    from vibecheck.services.practice import PATH_PATTERN
+
+    answer = "RuleEvaluator.java가 service/ClaimService.java를 부르고 cli.py도 본다"
+    assert PATH_PATTERN.findall(answer) == [
+        "RuleEvaluator.java",
+        "service/ClaimService.java",
+        "cli.py",
+    ]
