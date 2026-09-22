@@ -5,7 +5,7 @@
 식별자만 있어 문자열 매칭으로는 연결되지 않는다.
 텍스트를 의미 공간의 벡터로 변환하면 표현이 달라도 의미가 가까운 항목을 찾을 수 있다.
 """
-
+import os
 import threading
 from pathlib import Path
 
@@ -88,6 +88,51 @@ def build_embedding_text(chunk: Chunk) -> str:
     parts.append(chunk.code)
     return "\n".join(parts)
 
+def quiet_model_loading(model_name: str) -> None:
+    """임베딩 모델을 불러올 때 나오는 경고와 진행 막대를 끈다.
+
+    모델을 불러올 때마다 HF Hub의 토큰 경고와 "Loading weights" 진행 막대가
+    whyd 출력 사이에 끼어, 처음 보는 사람은 무언가 잘못된 것으로 읽는다.
+    토큰이 없어도 모델은 받아지므로, 경고는 사용자가 할 일이 없는 문구다.
+
+    진행 막대는 모델이 캐시에 있을 때만 끈다. 막대를 끄는 스위치가 다운로드
+    막대까지 함께 끄기 때문이다. 빈 캐시로 재보니 458MB를 받는 동안 화면에
+    아무것도 나오지 않았다. 처음 쓰는 사람에게 그것은 멈춘 화면이다.
+
+    환경변수가 아니라 함수로 끄는 이유는 순서다. 환경변수는 huggingface_hub를
+    import할 때 한 번 읽히는데, 캐시를 확인하려면 그보다 먼저 import해야 한다.
+
+    사용자가 HF_HUB_VERBOSITY나 HF_HUB_DISABLE_PROGRESS_BARS를 직접 정했으면
+    그 설정을 따른다. 여기서 바꾼 설정은 프로세스 전역에 걸린다.
+
+    Args:
+        model_name (str): sentence-transformers 모델 이름. 조직 이름이 없으면
+            sentence-transformers가 하듯이 앞에 붙여서 캐시를 찾는다.
+    """
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        from huggingface_hub.utils import disable_progress_bars, logging
+    except ImportError:
+        # sentence-transformers를 거쳐 설치되는 패키지라 직접 의존하지 않는다.
+        # 없으면 출력이 시끄러울 뿐 동작에는 문제가 없다.
+        return
+
+    if "HF_HUB_VERBOSITY" not in os.environ:
+        logging.set_verbosity_error()
+
+    if "HF_HUB_DISABLE_PROGRESS_BARS" in os.environ:
+        return
+
+    repo_id = model_name if "/" in model_name else f"sentence-transformers/{model_name}"
+
+    # 설정 파일이 아니라 가중치 파일로 확인한다. 다운로드가 가중치를 받다가
+    # 끊겼다면 설정 파일은 캐시에 있으므로, 설정 파일로 확인하면 다시 받는 동안
+    # 막대가 꺼진다. 가중치 파일 이름이 다른 모델이면 캐시가 없다고 보고 막대를
+    # 남기는데, 시끄러운 쪽으로 틀리는 것은 괜찮다.
+    cached = try_to_load_from_cache(repo_id, "model.safetensors")
+    if isinstance(cached, str):
+        disable_progress_bars()
+
 class VectorStore:
     """청크의 벡터 저장과 검색을 담당한다.
 
@@ -116,6 +161,7 @@ class VectorStore:
             persist_dir (str): 인덱스를 저장할 디렉토리 경로.
         """
         Path(persist_dir).mkdir(parents=True, exist_ok=True)
+        quiet_model_loading(EMBEDDING_MODEL)
         self.client = get_client(persist_dir)
         self.collection = self.client.get_or_create_collection(
             name=COLLECTION_NAME,
