@@ -51,6 +51,9 @@ class LanguageSpec:
             문장을 돌려준다. 없으면 None.
         doc_comment (bytes | None): 선언 바로 앞에 붙어 그 선언의 설명이 되는
             주석의 시작 표시. 설명이 선언 본문 안에 있는 언어는 None이다.
+        type_named_files (bool): 최상위 타입 이름이 곧 파일 이름이라는 것이 언어
+            규칙인가. 참이면 채점이 답변의 클래스 이름만으로 그 파일을 근거로
+            가져온다. 규칙이 없는 언어에서 이름으로 파일을 짐작하면 틀린 근거가 된다.
         collect_calls (Callable | None): 루트 노드와 소스를 받아 호출 목록을 돌려준다.
             None이면 그 언어는 호출 그래프를 만들지 않는다. 호출을 이름만으로
             해석하는 규칙이 언어마다 달라, 규칙이 없는 언어에서 억지로 이으면
@@ -68,6 +71,7 @@ class LanguageSpec:
     dependency_of: Callable[[str], tuple[str, bool]]
     entry_evidence: Callable[[str], str | None]
     doc_comment: bytes | None = None
+    type_named_files: bool = False
     collect_calls: Callable[[object, bytes], list[CallSite]] | None = None
 
 
@@ -97,6 +101,7 @@ JAVA = LanguageSpec(
     dependency_of=java.dependency_name,
     entry_evidence=java.entry_evidence,
     doc_comment=java.DOC_COMMENT_PREFIX,
+    type_named_files=True,
 )
 
 LANGUAGES: tuple[LanguageSpec, ...] = (PYTHON, JAVA)

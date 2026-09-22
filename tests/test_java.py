@@ -115,3 +115,35 @@ def test_답변이_짚은_java_파일을_잡는다():
         "service/ClaimService.java",
         "cli.py",
     ]
+
+
+def test_클래스_이름만_써도_java_파일을_가져온다():
+    """Java는 공개 클래스 이름이 파일 이름이라 확장자 없이 짚어도 파일이 정해진다.
+
+    이름이 두 파일에 걸리면(다른 패키지의 같은 이름) 짐작하지 않고 건너뛴다.
+    파이썬은 그런 규칙이 없어 모듈 이름만으로는 가져오지 않는다.
+    레포에 없는 대문자 낱말은 걸리지 않는다. 나온 자리 순서를 지킨다.
+    """
+    from vibecheck.models import Chunk
+    from vibecheck.services.practice import find_mentioned_files
+
+    def file_chunk(path):
+        return Chunk(file=path, symbol=path, kind="file", start_line=1, end_line=1, code="")
+
+    chunks = [
+        file_chunk("src/service/RuleEvaluator.java"),
+        file_chunk("src/domain/Claim.java"),
+        file_chunk("src/dto/Claim.java"),
+        file_chunk("src/Review.java"),
+        file_chunk("vibecheck/Practice.py"),
+    ]
+    answer = (
+        "Spring API에서 Review.approve를 부르고, RuleEvaluator가 조건을 읽으며, "
+        "Claim은 두 곳에 있고 Practice는 파이썬이다. src/domain/Claim.java도 본다."
+    )
+
+    assert [c.file for c in find_mentioned_files(answer, chunks)] == [
+        "src/Review.java",
+        "src/service/RuleEvaluator.java",
+        "src/domain/Claim.java",
+    ]

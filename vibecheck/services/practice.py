@@ -21,6 +21,7 @@
 import json
 import re
 from dataclasses import replace
+from pathlib import Path
 
 from tree_sitter import Parser
 
@@ -176,6 +177,17 @@ PATH_PATTERN = re.compile(
 그대로 되살아난다.
 """
 
+TYPE_NAME_PATTERN = re.compile(r"(?<![A-Za-z0-9_./-])[A-Z][A-Za-z0-9_]*(?![A-Za-z0-9_])")
+"""답변에서 대문자로 시작하는 이름을 떼어내는 무늬.
+
+"RuleEvaluator가"처럼 한글 조사가 바로 붙어도 잡히도록 뒤쪽 경계를 PATH_PATTERN과
+같은 방식으로 둔다. 앞쪽에 점이나 슬래시가 오면 잡지 않는다. com.a.B나 a/B처럼
+경로의 한 조각인 경우라, 그 경로 전체는 PATH_PATTERN의 몫이다.
+
+"RuleEvaluator.evaluate"처럼 뒤에 점이 오는 것은 잡는다. 메서드를 짚으면서
+클래스 이름을 쓴 것이다.
+"""
+
 
 def find_mentioned_files(user_answer: str, chunks: list[Chunk]) -> list[Chunk]:
     """답변이 이름으로 짚은 파일의 파일 단위(L1) 청크를 찾는다.
@@ -194,6 +206,18 @@ def find_mentioned_files(user_answer: str, chunks: list[Chunk]) -> list[Chunk]:
     web/routers에 하나씩 있다. 어느 쪽인지 짐작해 가져오면 틀렸을 때 근거
     한 자리를 버리게 되고, 그 자리는 벡터 검색이 채우는 편이 낫다.
 
+    확장자 없이 타입 이름만 써도 파일을 찾는다. 단, 타입 이름이 곧 파일 이름이라는
+    것이 언어 규칙인 경우만이다(언어 설정의 type_named_files, 지금은 Java).
+    Java 답변은 "RuleEvaluator가 조건을 DB에서 읽는다"처럼 파일이 아니라 클래스를
+    말하는 것이 자연스럽고, 공개 클래스는 파일 이름과 같아야 하므로 이름에서 파일이
+    하나로 정해진다. 파이썬은 그런 규칙이 없어 "practice 서비스"가 어느 파일인지
+    이름만으로 정할 수 없다. 규칙이 없는 곳에서 짐작하면 틀린 근거를 가져온다.
+
+    그 이름의 파일이 레포에 없으면 아무것도 가져오지 않는다. "Spring"이나 "API"
+    같은 대문자 낱말은 그래서 걸리지 않는다. 반대로 Claim.java가 있는 레포에서
+    "Claim"을 일반 명사처럼 써도 그 파일을 가져오는데, 그 파일을 보고 판정하는
+    것이 확인하러 가는 것의 범위 안이라 받아들인다.
+
     Args:
         user_answer (str): 사용자 답변 원문.
         chunks (list[Chunk]): 인덱싱된 전체 청크 목록.
@@ -203,19 +227,38 @@ def find_mentioned_files(user_answer: str, chunks: list[Chunk]) -> list[Chunk]:
     """
     file_chunks = [c for c in chunks if c.kind == "file" and spec_for(c.file)]
 
-    found: list[Chunk] = []
-    seen: set[str] = set()
+    # 두 무늬로 찾은 것을 답변에 나온 자리 순으로 합친다. 근거 자리가 모자랄 때
+    # 앞에 짚은 것이 남아야 한다. 무늬별로 따로 이어붙이면 경로를 쓴 것이
+    # 늘 이름만 쓴 것보다 앞서게 된다.
+    mentions: list[tuple[int, Chunk]] = []
 
-    for mention in PATH_PATTERN.findall(user_answer):
+    for m in PATH_PATTERN.finditer(user_answer):
+        mention = m.group()
         matches = [
             c for c in file_chunks
             if c.file == mention or c.file.endswith("/" + mention)
         ]
-        if len(matches) != 1 or matches[0].id in seen:
-            continue
+        if len(matches) == 1:
+            mentions.append((m.start(), matches[0]))
 
-        seen.add(matches[0].id)
-        found.append(matches[0])
+    by_type: dict[str, list[Chunk]] = {}
+    for c in file_chunks:
+        if spec_for(c.file).type_named_files:
+            by_type.setdefault(Path(c.file).stem, []).append(c)
+
+    for m in TYPE_NAME_PATTERN.finditer(user_answer):
+        matches = by_type.get(m.group(), [])
+        if len(matches) == 1:
+            mentions.append((m.start(), matches[0]))
+
+    found: list[Chunk] = []
+    seen: set[str] = set()
+
+    for _, chunk in sorted(mentions, key=lambda pair: pair[0]):
+        if chunk.id in seen:
+            continue
+        seen.add(chunk.id)
+        found.append(chunk)
 
     return found
 
