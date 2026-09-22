@@ -29,6 +29,31 @@ app = FastAPI(
 
 app.include_router(report.router, prefix="/api", tags=["report"])
 
+@app.middleware("http")
+async def revalidate_static(request, call_next):
+    """화면 파일에 매번 서버에 확인하고 쓰라는 헤더를 붙인다.
+
+    StaticFiles는 수정 시각과 ETag만 붙이고 캐시 지시는 붙이지 않는다. 그러면
+    브라우저가 최근에 바뀐 파일은 한동안 확인 없이 써도 된다고 스스로 판단해,
+    index.html을 고치고 서버를 다시 띄워도 옛 화면이 떴다. 사파리에서 실제로
+    그렇게 떠서 강력 새로고침을 해야 새 화면이 보였다.
+
+    no-cache는 저장을 막는 것이 아니라 쓰기 전에 확인하라는 뜻이다. 파일이
+    그대로면 서버는 304로 "그대로"라고만 답하므로 다시 받지 않는다.
+
+    /api는 건드리지 않는다. 수정 시각이 없어 브라우저가 스스로 캐시하지 않는다.
+
+    Args:
+        request: 들어온 요청.
+        call_next: 다음 처리 단계.
+
+    Returns:
+        헤더를 붙인 응답.
+    """
+    response = await call_next(request)
+    if not request.url.path.startswith("/api"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
 
 @app.get("/health")
 def health() -> dict[str, str]:
