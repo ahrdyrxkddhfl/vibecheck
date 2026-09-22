@@ -631,7 +631,7 @@ function render(d) {
       // 접힌 상태에서도 왜 전부 추정인지 읽혀야 한다.
     if (!confirmed.length) {
       entryNodes.push(el("div", "fnote",
-        "pyproject.toml에 등록된 명령이 없습니다. 아래는 파일 이름과 코드 관례로 추정한 것입니다."));
+        "확정할 수 있는 진입점이 없습니다. 아래는 파일 이름과 코드 관례로 추정한 것입니다."));
     }
     entryNodes.push(...confirmed.map(entryRow));
 

@@ -186,7 +186,7 @@ def build_report(
     else:
         if not confirmed:
             lines.append(
-                "pyproject.toml에 등록된 명령이 없습니다. "
+                "확정할 수 있는 진입점이 없습니다. "
                 "아래는 파일 이름과 코드 관례로 추정한 것입니다."
             )
             lines.append("")
