@@ -58,6 +58,7 @@ def walk(
     parent_is_class: bool = False,
     class_types: frozenset[str] = CLASS_TYPES,
     function_types: frozenset[str] = FUNCTION_TYPES,
+    doc_comment: bytes | None = None,
 ) -> list[Symbol]:
     """문법 트리를 재귀 순회하며 심볼을 수집한다.
 
@@ -83,6 +84,10 @@ def walk(
     어떤 노드를 클래스와 함수로 볼지는 인자로 받는다. 순회와 소속 추적은
     언어와 무관하고 노드 이름만 언어마다 다르다. 기본값은 파이썬이다.
 
+    doc_comment를 주면 선언 바로 앞에 붙은 그 모양의 주석까지 심볼 범위에 넣는다.
+    Java의 Javadoc처럼 설명이 선언 밖에 있는 언어를 위한 것이다. 파이썬은
+    독스트링이 본문 안에 있어 넘기지 않는다.
+
     Args:
         node (Node): 현재 순회 중인 노드.
         source (bytes): 원본 소스. 노드 이름을 꺼낼 때 사용한다.
@@ -92,6 +97,8 @@ def walk(
         parent_is_class (bool): 상위 심볼이 클래스인지 여부.
         class_types (frozenset[str]): 클래스로 볼 노드 타입.
         function_types (frozenset[str]): 함수로 볼 노드 타입.
+        doc_comment (bytes | None): 범위에 포함할 문서 주석의 시작 표시.
+            예를 들어 b"/**". None이면 선언 노드의 범위를 그대로 쓴다.
 
     Returns:
         list[Symbol]: 파일 내 모든 함수·클래스 심볼. 소스 등장 순서를 따른다.
@@ -117,6 +124,19 @@ def walk(
         else:
             kind = "function"
 
+        start_row = node.start_point[0]
+        prev = node.prev_sibling
+        # 바로 윗줄까지 붙어 있는 주석만 이 선언의 설명으로 본다.
+        # 빈 줄을 두고 떨어진 주석은 다른 것에 대한 말일 수 있다.
+        if (
+            doc_comment is not None
+            and prev is not None
+            and "comment" in prev.type
+            and source[prev.start_byte : prev.end_byte].startswith(doc_comment)
+            and prev.end_point[0] >= start_row - 1
+        ):
+            start_row = prev.start_point[0]
+
         results.append(
             Symbol(
                 name=name,
@@ -124,7 +144,7 @@ def walk(
                 # tree-sitter는 0-based, 에디터는 1-based이므로 보정한다.
                 # 이 보정이 없으면 사용자에게 안내하는 라인 번호가
                 # 실제보다 한 줄씩 밀린다.
-                start_line=node.start_point[0] + 1,
+                start_line=start_row + 1,
                 end_line=node.end_point[0] + 1,
                 parent=parent,
             )
@@ -143,6 +163,7 @@ def walk(
             next_is_class,
             class_types,
             function_types,
+            doc_comment,
         )
 
     return results

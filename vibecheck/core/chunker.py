@@ -39,6 +39,7 @@ def to_chunks(
     """
     lines = source.decode().splitlines()
     chunks = []
+    seen: dict[str, int] = {}
 
     for s in symbols:
         # 라인 번호는 1-based, 리스트 인덱스는 0-based이므로 시작에 -1을 적용
@@ -49,6 +50,15 @@ def to_chunks(
         # 소속을 포함한 전체 이름을 만든다. 검색 시 login보다 auth.login이
         # 더욱 정확하게 매칭되므로 이 형태로 저장한다.
         symbol_name = f"{s.parent}.{s.name}" if s.parent else s.name
+
+        # 같은 파일에 같은 이름이 또 나오면 뒤의 것에 순번을 붙인다.
+        # 청크 id가 "파일::심볼"이라 이름이 겹치면 id도 겹치고, 저장소가
+        # 하나를 다른 하나로 덮어쓰거나 넣기를 거부한다. Java의 오버로딩과
+        # 파이썬의 property getter·setter가 이 경우다. 첫 번째는 이름을
+        # 그대로 두어 겹침이 없는 대부분의 청크는 id가 바뀌지 않는다.
+        seen[symbol_name] = seen.get(symbol_name, 0) + 1
+        if seen[symbol_name] > 1:
+            symbol_name = f"{symbol_name}#{seen[symbol_name]}"
 
         chunks.append(
             Chunk(

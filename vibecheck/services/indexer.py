@@ -92,6 +92,7 @@ def index_repo(
             source,
             class_types=spec.class_types,
             function_types=spec.function_types,
+            doc_comment=spec.doc_comment,
         )
         docstring = spec.extract_docstring(tree.root_node, source)
         imports = spec.extract_imports(tree.root_node, source)

@@ -13,19 +13,19 @@ from vibecheck.core.collector import (
 
 
 def test_대상이_아닌_확장자는_버리고_경로를_남긴다(tmp_path):
-    """파이썬만 걷되 버린 것의 경로를 잃지 않는지 확인한다.
+    """지원 언어만 걷되 버린 것의 경로를 잃지 않는지 확인한다.
 
     개수만 세면 나중에 뺄 수 없다. README처럼 수집 대상이 아니면서
     다른 경로로 인덱싱되는 파일을 보고에서 골라내려면 경로가 필요하다.
     """
     (tmp_path / "a.py").write_text("x = 1")
     (tmp_path / "b.py").write_text("y = 2")
-    (tmp_path / "Main.java").write_text("class Main {}")
+    (tmp_path / "main.go").write_text("package main")
 
     result = collect_source_files(str(tmp_path))
 
     assert [p.name for p in result.files] == ["a.py", "b.py"]
-    assert [p.name for p in result.skipped_other] == ["Main.java"]
+    assert [p.name for p in result.skipped_other] == ["main.go"]
 
 
 def test_제외_디렉터리는_세지_않는다(tmp_path):
