@@ -74,8 +74,11 @@ def extract_imports(root_node, source: bytes) -> list[str]:
     없다. 최상위 노드만 본다.
 
     import com.a.B는 com.a.B, import static com.a.B.c는 com.a.B.c를 남긴다.
-    내부 모듈 판별(is_internal_import)이 이름을 뒤에서부터 잘라 파일 이름과
-    대조하므로 원문 그대로여야 한다.
+    원문을 그대로 두고 줄이지 않는다. 내부 모듈 판별(is_internal_import)은
+    이름을 앞에서부터 잘라 파일 이름과 대조하므로, 끝에 static 멤버나 중첩
+    클래스가 붙은 이름은 그대로는 어떤 파일과도 만나지 않는다. 그 부분을 떼는
+    일은 대조하는 쪽이 import_target으로 한다. 여기서 줄이면 저장되는 import가
+    바뀌어 규칙을 고칠 때마다 다시 인덱싱해야 한다.
 
     와일드카드(import com.a.*)는 패키지 이름 com.a만 남긴다. 별표는 모듈 이름이
     아니어서, 붙여두면 어떤 대조에도 걸리지 않는다.
@@ -206,6 +209,34 @@ def dependency_name(import_name: str) -> tuple[str, bool]:
         package = parts[:1]
 
     return ".".join(package[:2]), import_name.startswith(STDLIB_PREFIXES)
+
+
+def import_target(import_name: str) -> str:
+    """import 이름을 그것이 가리키는 파일의 이름으로 줄인다.
+
+    Java는 파일 하나에 최상위 타입 하나를 두고 그 이름이 파일 이름이라, import가
+    가리키는 파일은 이름 속 첫 클래스다. 그 뒤에 붙은 조각은 같은 파일 안의 것이다.
+    import com.a.B.Inner(중첩 클래스)와 import static com.a.B.c(멤버)는 둘 다
+    B.java를 가리키므로 com.a.B까지 남긴다. 줄이지 않으면 뒤쪽 조각 때문에
+    파일 이름 B와 대조되지 않아, 자기 패키지가 외부 의존성으로 올라간다.
+
+    클래스는 대문자로 시작하는 첫 조각으로 가른다. dependency_name이 패키지와
+    클래스를 가를 때 쓰는 관례와 같다.
+
+    대문자 조각이 없으면 받은 이름 그대로 둔다. 와일드카드가 남긴 패키지
+    이름(com.a)이 여기에 해당하며, 파일 하나를 가리키지 않는다.
+
+    Args:
+        import_name (str): extract_imports가 남긴 import 이름.
+
+    Returns:
+        str: 첫 클래스까지 줄인 이름. 클래스가 없으면 받은 이름 그대로.
+    """
+    parts = import_name.split(".")
+    for i, part in enumerate(parts):
+        if part[:1].isupper():
+            return ".".join(parts[: i + 1])
+    return import_name
 
 
 def entry_evidence(source: str) -> str | None:

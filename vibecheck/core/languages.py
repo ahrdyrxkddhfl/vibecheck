@@ -30,6 +30,21 @@ from vibecheck.core.parser import (
 from vibecheck.models import CallSite
 
 
+def keep_import_name(import_name: str) -> str:
+    """import 이름을 그대로 대조 대상으로 쓴다.
+
+    import 이름이 곧 모듈 이름인 언어의 기본값이다. 파이썬의 import
+    vibecheck.core.parser는 그 이름 그대로 파일 하나를 가리킨다.
+
+    Args:
+        import_name (str): import 이름.
+
+    Returns:
+        str: 받은 이름 그대로.
+    """
+    return import_name
+
+
 @dataclass(frozen=True)
 class LanguageSpec:
     """언어 하나를 읽는 데 필요한 것을 묶는다.
@@ -49,6 +64,10 @@ class LanguageSpec:
             있는지가 언어마다 다르다.
         entry_evidence (Callable): 파일 원문을 받아 직접 실행할 수 있다는 근거
             문장을 돌려준다. 없으면 None.
+        import_target (Callable): import 이름을 받아 그 import가 가리키는 파일의
+            모듈 이름으로 줄인다. 내부 판별과 import 간선이 원래 이름 대신 이 결과로
+            대조한다. 저장된 import 이름은 원문 그대로 두고 대조할 때만 줄이므로,
+            규칙을 바꿔도 다시 인덱싱할 필요가 없다.
         doc_comment (bytes | None): 선언 바로 앞에 붙어 그 선언의 설명이 되는
             주석의 시작 표시. 설명이 선언 본문 안에 있는 언어는 None이다.
         type_named_files (bool): 최상위 타입 이름이 곧 파일 이름이라는 것이 언어
@@ -73,6 +92,7 @@ class LanguageSpec:
     extract_docstring: Callable[[object, bytes], str | None]
     dependency_of: Callable[[str], tuple[str, bool]]
     entry_evidence: Callable[[str], str | None]
+    import_target: Callable[[str], str] = keep_import_name
     doc_comment: bytes | None = None
     type_named_files: bool = False
     collect_type_refs: Callable[[object, bytes], dict[str, int]] | None = None
@@ -104,6 +124,7 @@ JAVA = LanguageSpec(
     extract_docstring=java.extract_file_doc,
     dependency_of=java.dependency_name,
     entry_evidence=java.entry_evidence,
+    import_target=java.import_target,
     doc_comment=java.DOC_COMMENT_PREFIX,
     type_named_files=True,
     collect_type_refs=java.type_references,

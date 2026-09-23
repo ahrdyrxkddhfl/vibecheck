@@ -138,6 +138,12 @@ def split_dependencies(
     언어마다 달라 청크 파일의 언어 설정(dependency_of)에 맡긴다. 파이썬처럼
     첫 조각만 떼면 Java의 org.springframework가 org로 줄어 뜻이 사라진다.
 
+    내부인지 가를 때는 import 이름을 언어 설정(import_target)으로 줄여서
+    대조한다. Java의 import static com.a.B.c는 B.java를 가리키지만, 원래 이름
+    그대로는 파일 이름 B와 만나지 않아 자기 패키지가 외부 의존성으로 올라간다.
+    외부로 판정된 뒤에는 원래 이름을 dependency_of에 넘긴다. 라이브러리 이름을
+    고르는 규칙은 거기에 따로 있다.
+
     Args:
         chunks (list[Chunk]): 인덱싱된 청크 목록.
         module_names (set[str]): 내부 모듈 이름 집합.
@@ -153,7 +159,8 @@ def split_dependencies(
     for chunk in chunks:
         spec = spec_for(chunk.file)
         for imp in chunk.imports:
-            if is_internal_import(imp, module_names):
+            target = spec.import_target(imp) if spec else imp
+            if is_internal_import(target, module_names):
                 internal_count += 1
                 continue
 
@@ -169,6 +176,7 @@ def split_dependencies(
                 third_party.add(name)
 
     return sorted(third_party), sorted(stdlib), internal_count
+
 
 def build_import_edges(
     l1: list[Chunk], module_map: dict[str, str]
@@ -186,6 +194,10 @@ def build_import_edges(
     가리키는지 알 수 없어 도착지를 정할 수 없다. is_internal_import는
     이것을 내부로 세지만 개수와 간선은 목적이 다르다.
 
+    import 이름은 언어 설정(import_target)으로 줄인 뒤 대조한다. Java의
+    import com.a.B.Inner는 B.java를 가리키는데, 원래 이름 그대로는 어떤
+    파일과도 만나지 않아 간선이 빠진다. split_dependencies와 같은 이유다.
+
     자기 자신을 가리키는 간선도 버린다. 패키지 안에서 같은 이름이
     겹칠 때 생기는데, 관계도에서 자기 자신으로 도는 화살표는 정보가 아니다.
 
@@ -200,6 +212,7 @@ def build_import_edges(
     edges: set[tuple[str, str]] = set()
 
     for chunk in l1:
+        spec = spec_for(chunk.file)
         for imp in chunk.imports:
             if imp.startswith("."):
                 continue
@@ -207,7 +220,8 @@ def build_import_edges(
             # 모듈 이름을 앞에서부터 잘라가며 대조한다. 수집 경로의 기준점이
             # 실행 위치에 따라 달라져 vibecheck.core.parser로 잡힐 수도
             # core.parser로 잡힐 수도 있다. is_internal_import와 같은 방식이다.
-            parts = imp.split(".")
+            name = spec.import_target(imp) if spec else imp
+            parts = name.split(".")
             target = None
             for i in range(len(parts)):
                 candidate = ".".join(parts[i:])
