@@ -286,25 +286,25 @@ def find_package_anchor(path: Path) -> Path:
     return anchor
 
 
-def build_module_map(files: list[Path], root: str) -> dict[str, str]:
-    """모듈 이름에서 파일 경로로 가는 대응표를 만든다.
+def module_entries(files: list[Path], root: str) -> list[tuple[str, str]]:
+    """파일마다 모듈 이름을 붙인다.
 
-    import 문에 적힌 것은 `vibecheck.core.parser` 같은 모듈 이름이지만,
-    파일 간 관계를 그리려면 `vibecheck/core/parser.py`라는 경로가 필요하다.
-    이름만으로는 어느 파일을 가리키는지 알 수 없어 화살표를 그을 수 없다.
+    대응표(build_module_map)와 이름 집합(build_module_names)이 이 한 계산을
+    나눠 쓴다. 같은 계산을 두 벌로 두면 한쪽만 고쳤을 때 둘이 어긋나는데,
+    그 차이는 예외 없이 조용히 진행된다.
 
-    build_module_names와 같은 계산을 하되 이름만 남기지 않고 출처를 함께
-    보관한다. 이름 집합이 필요한 쪽은 이 표의 키만 쓰면 되므로
-    계산이 두 벌로 갈라지지 않는다.
+    이름이 겹칠 수 있어 사전이 아니라 목록으로 돌려준다. Java 파일은 클래스
+    이름만 받으므로 다른 패키지의 같은 이름 클래스가 같은 이름이 되고, 파이썬도
+    __init__.py 없는 폴더의 같은 이름 파일은 같은 이름이 된다.
 
     Args:
         files (list[Path]): collect_files가 수집한 경로 목록.
         root (str): 레포 루트 경로. 기준점이 루트를 벗어날 때의 안전망.
 
     Returns:
-        dict[str, str]: 모듈 이름 -> 레포 루트 기준 상대 경로.
+        list[tuple[str, str]]: (모듈 이름, 레포 루트 기준 상대 경로) 목록.
     """
-    mapping: dict[str, str] = {}
+    entries: list[tuple[str, str]] = []
     root_path = Path(root).resolve()
 
     for path in files:
@@ -325,9 +325,41 @@ def build_module_map(files: list[Path], root: str) -> dict[str, str]:
         elif module == "__init__":
             continue
 
-        mapping[module] = resolved.relative_to(root_path).as_posix()
+        entries.append((module, resolved.relative_to(root_path).as_posix()))
 
-    return mapping
+    return entries
+
+
+def build_module_map(files: list[Path], root: str) -> dict[str, str]:
+    """모듈 이름에서 파일 경로로 가는 대응표를 만든다.
+
+    import 문에 적힌 것은 `vibecheck.core.parser` 같은 모듈 이름이지만,
+    파일 간 관계를 그리려면 `vibecheck/core/parser.py`라는 경로가 필요하다.
+    이름만으로는 어느 파일을 가리키는지 알 수 없어 화살표를 그을 수 없다.
+
+    이름 하나에 파일이 하나인 것만 싣는다. a/Config.java와 b/Config.java가
+    함께 있으면 Config가 어느 쪽인지 이름만으로 정할 수 없다. 예전에는 뒤의
+    파일이 앞의 파일을 조용히 덮어써서, 수집 순서가 간선의 도착지를 정했다.
+    관계도(relations.type_neighbors)와 채점 근거(practice)도 겹치는 이름은
+    짐작하지 않고 뺀다.
+
+    이 표의 키를 내부 판별용 이름 집합으로 쓰면 안 된다. 겹치는 이름이 빠져
+    있어, 그 클래스를 가져다 쓰는 import가 외부로 판정된다. 판별에는
+    build_module_names를 쓴다.
+
+    Args:
+        files (list[Path]): collect_files가 수집한 경로 목록.
+        root (str): 레포 루트 경로. 기준점이 루트를 벗어날 때의 안전망.
+
+    Returns:
+        dict[str, str]: 모듈 이름 -> 레포 루트 기준 상대 경로.
+            이름이 둘 이상의 파일에 붙으면 싣지 않는다.
+    """
+    paths: dict[str, list[str]] = {}
+    for module, path in module_entries(files, root):
+        paths.setdefault(module, []).append(path)
+
+    return {module: ps[0] for module, ps in paths.items() if len(ps) == 1}
 
 
 def build_module_names(files: list[Path], root: str) -> set[str]:
@@ -336,9 +368,8 @@ def build_module_names(files: list[Path], root: str) -> set[str]:
     import 대상이 레포 내부인지 외부 라이브러리인지 가르려면
     "내부에 무엇이 있는지" 목록이 먼저 필요하다.
 
-    계산은 build_module_map에 맡기고 키만 꺼낸다.
-    같은 계산을 두 벌로 두면 한쪽만 고쳤을 때 이름 집합과 대응표가
-    어긋나는데, 그 차이는 예외 없이 조용히 진행된다.
+    대응표(build_module_map)와 달리 이름이 겹치는 것도 싣는다. 판별에는 어느
+    파일인지가 필요 없고, 레포 안에 그 이름이 있다는 것만으로 충분하다.
 
     Args:
         files (list[Path]): collect_files가 수집한 경로 목록.
@@ -347,7 +378,7 @@ def build_module_names(files: list[Path], root: str) -> set[str]:
     Returns:
         set[str]: 점으로 구분된 모듈 이름 집합.
     """
-    return set(build_module_map(files, root))
+    return {module for module, _ in module_entries(files, root)}
 
 
 def build_package_names(files: list[Path]) -> set[str]:

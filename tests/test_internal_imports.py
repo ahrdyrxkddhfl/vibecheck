@@ -16,7 +16,11 @@ from types import SimpleNamespace
 import pytest
 
 from vibecheck.core import java
-from vibecheck.core.collector import build_package_names
+from vibecheck.core.collector import (
+    build_module_map,
+    build_module_names,
+    build_package_names,
+)
 from vibecheck.core.languages import PYTHON
 from vibecheck.core.overview import build_import_edges, split_dependencies
 
@@ -184,3 +188,35 @@ def test_java_own_package_wildcard_stays_internal(tmp_path):
 
     assert third_party == ["org.springframework"]
     assert internal_count == 1
+
+
+def test_same_class_name_in_two_packages_is_internal_but_gets_no_edge(tmp_path):
+    """이름이 겹치는 클래스는 내부로 판정하되, 어느 파일인지 짐작해 잇지 않는다.
+
+    예전에는 대응표에서 뒤의 파일이 앞의 파일을 덮어써, 간선이 수집 순서가 고른
+    파일로 갔다. 대응표에서 빼기만 하고 이름 집합까지 대응표의 키로 만들면
+    이번에는 그 import가 외부로 판정된다. 둘을 함께 확인한다.
+
+    Args:
+        tmp_path (Path): pytest가 주는 임시 폴더.
+    """
+    files = []
+    for rel in ("a/Config.java", "b/Config.java", "c/User.java"):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("class X {}\n")
+        files.append(path)
+
+    module_map = build_module_map(files, str(tmp_path))
+    module_names = build_module_names(files, str(tmp_path))
+
+    assert module_map == {"User": "c/User.java"}
+    assert module_names == {"Config", "User"}
+
+    chunk = SimpleNamespace(file="c/User.java", imports=["com.a.Config"])
+
+    third_party, _, internal_count = split_dependencies([chunk], module_names)
+    assert third_party == []
+    assert internal_count == 1
+
+    assert build_import_edges([chunk], module_map) == []
