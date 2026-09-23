@@ -4,7 +4,7 @@
 인덱스와 같은 자리에 두는 이유는 레포마다 자기 기록을 갖게 하기 위해서다.
 한 파일에 여러 레포 기록이 섞이면 학습 진단이 엉킨다.
 
-ORM을 쓰지 않고 sqlite3를 직접 쓴다. 테이블이 다섯 개뿐이고 쿼리도 단순해
+ORM을 쓰지 않고 sqlite3를 직접 쓴다. 테이블이 여섯 개뿐이고 쿼리도 단순해
 라이브러리를 얹으면 얻는 것보다 늘어나는 개념이 많다.
 """
 
@@ -56,6 +56,15 @@ CREATE TABLE IF NOT EXISTS claims (
     hedged      INTEGER NOT NULL,
     evidence    TEXT,
     note        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS asks (
+    id          INTEGER PRIMARY KEY,
+    repo_id     INTEGER NOT NULL REFERENCES repos(id),
+    question    TEXT NOT NULL,
+    answer      TEXT NOT NULL,
+    sources     TEXT NOT NULL,
+    created_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS typing_runs (
@@ -367,3 +376,75 @@ def repeated_assertions(conn: sqlite3.Connection, repo_id: int, limit: int = 5) 
         "ORDER BY a.created_at DESC LIMIT ?",
         (repo_id, limit),
     ).fetchall()
+
+
+def save_ask(
+    conn: sqlite3.Connection,
+    repo_id: int,
+    question: str,
+    answer: str,
+    sources: list[dict],
+) -> int:
+    """질문과 그때 받은 답, 근거를 저장한다.
+
+    채점 기록(answers)과 테이블을 나눈다. 기록 화면 맨 위의 누적은 채점된 주장의
+    판정으로 세는데, 질문과 답은 채점된 적이 없어 섞이면 그 숫자가 흐려진다.
+
+    근거는 JSON 문자열로 넣는다. 질문을 꺼낼 때 늘 함께 나오는 부속물이고
+    가로질러 세어볼 일이 없다. questions의 can_say와 같은 이유다.
+
+    근거의 줄 번호는 저장할 때 그대로 남는다. 나중에 코드를 고치면 줄이 어긋나지만,
+    이것은 "그때 그 답이 무엇을 근거로 했나"의 기록이라 고쳐 쓰지 않는다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+        repo_id (int): 대상 레포 id.
+        question (str): 사용자 질문.
+        answer (str): 받은 답(마크다운).
+        sources (list[dict]): 근거 목록. services.qa.source_refs의 결과.
+
+    Returns:
+        int: 저장된 asks 행의 id.
+    """
+    cur = conn.execute(
+        "INSERT INTO asks (repo_id, question, answer, sources, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (repo_id, question, answer, json.dumps(sources, ensure_ascii=False), now()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_asks(conn: sqlite3.Connection, repo_id: int, limit: int = 20) -> list:
+    """최근 질문 기록을 시간 역순으로 가져온다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+        repo_id (int): 대상 레포 id.
+        limit (int): 가져올 최대 개수.
+
+    Returns:
+        list: asks 행 목록. 최신순. sources는 JSON 문자열 그대로다.
+    """
+    return conn.execute(
+        "SELECT * FROM asks WHERE repo_id = ? ORDER BY created_at DESC LIMIT ?",
+        (repo_id, limit),
+    ).fetchall()
+
+
+def count_asks(conn: sqlite3.Connection, repo_id: int) -> int:
+    """저장된 질문 수를 센다.
+
+    목록은 최근 몇 건만 꺼내므로, 잘렸는지 밝히려면 전체 수가 따로 필요하다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+        repo_id (int): 대상 레포 id.
+
+    Returns:
+        int: 질문 수.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM asks WHERE repo_id = ?", (repo_id,)
+    ).fetchone()
+    return row["n"]

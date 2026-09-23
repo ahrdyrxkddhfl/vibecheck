@@ -4,17 +4,23 @@
 묶는다. 특히 주장 판정 누적을 세 숫자로 합치고 경향을 한 줄로 짚는 계산은 CLI
 (whyd history) 안에 있었는데, 웹 화면을 붙이면서 이리로 옮겼다. 두 곳에 따로 두면
 한쪽 문장만 고쳤을 때 같은 기록을 CLI와 웹이 다르게 말한다.
+
+기록은 두 가지다. 채점 기록은 주장 판정이 붙어 누적과 경향을 계산하고,
+질문 기록은 질문과 그때 받은 답을 남길 뿐 누적에 들어가지 않는다.
 """
 
+import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from vibecheck.store.records import (
     claims_for,
     connect,
+    count_asks,
     db_path,
     get_repo_id,
     list_answers,
+    list_asks,
     repeated_assertions,
     verdict_summary,
 )
@@ -92,18 +98,29 @@ def load_history(repo: Path, limit: int = 20) -> dict:
     답변마다 그때의 주장별 판정을 붙인다. 채점 직후 화면과 같은 모양이라,
     웹은 채점 결과를 그리던 코드로 지난 기록도 그린다.
 
+    질문 기록도 질문 직후 화면(/api/ask)과 같은 모양으로 꺼낸다. 근거는
+    저장할 때 JSON으로 넣었으므로 여기서 푼다.
+
     기록 파일이 없으면 만들지 않고 빈 결과를 돌려준다. 여는 것만으로 파일을
     만들면(records.connect) 경로만 친 폴더에 .vibecheck가 생긴다.
 
     Args:
         repo (Path): 대상 레포 루트.
-        limit (int): 가져올 최근 답변 수.
+        limit (int): 가져올 최근 답변 수. 질문 기록도 같은 수만큼 가져온다.
 
     Returns:
         dict: answers(최신순, 주장 포함), tally(누적), risky(단정한 주장),
-            answer_count(전체 답변 수).
+            answer_count(전체 답변 수), asks(최신순 질문 기록),
+            ask_count(전체 질문 수).
     """
-    empty = {"answers": [], "tally": asdict(tally({})), "risky": [], "answer_count": 0}
+    empty = {
+        "answers": [],
+        "tally": asdict(tally({})),
+        "risky": [],
+        "answer_count": 0,
+        "asks": [],
+        "ask_count": 0,
+    }
     if not db_path(repo).exists():
         return empty
 
@@ -117,6 +134,8 @@ def load_history(repo: Path, limit: int = 20) -> dict:
         count = conn.execute(
             "SELECT COUNT(*) AS n FROM answers WHERE repo_id = ?", (repo_id,)
         ).fetchone()["n"]
+        ask_rows = list_asks(conn, repo_id, limit)
+        ask_count = count_asks(conn, repo_id)
     finally:
         conn.close()
 
@@ -160,4 +179,15 @@ def load_history(repo: Path, limit: int = 20) -> dict:
             for r in risky
         ],
         "answer_count": count,
+        "asks": [
+            {
+                "id": r["id"],
+                "created_at": r["created_at"],
+                "question": r["question"],
+                "answer": r["answer"],
+                "sources": json.loads(r["sources"]),
+            }
+            for r in ask_rows
+        ],
+        "ask_count": ask_count,
     }

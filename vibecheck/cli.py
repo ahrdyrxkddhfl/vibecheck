@@ -16,6 +16,7 @@
 """
 
 import shlex
+import sqlite3
 import threading
 import webbrowser
 from pathlib import Path
@@ -38,16 +39,18 @@ from vibecheck.services.history import tally
 from vibecheck.services.indexer import index_repo
 from vibecheck.services.interview import build_questions, format_questions
 from vibecheck.services.practice import grade
-from vibecheck.services.qa import answer
+from vibecheck.services.qa import answer, source_refs
 from vibecheck.services.report import build_report
 from vibecheck.store.records import (
     connect,
+    count_asks,
     count_questions,
     get_question,
     get_repo_id,
     list_answers,
     repeated_assertions,
     save_answer,
+    save_ask,
     save_questions,
     verdict_summary,
 )
@@ -275,6 +278,17 @@ def ask(
         for c in sources:
             typer.echo(f"  {c.file}:{c.start_line}-{c.end_line}  {c.symbol}")
 
+    # 화면에 뿌린 뒤 저장한다. 저장이 실패해도 사용자는 답을 이미 받았고,
+    # 요금도 이미 나갔다. 실패는 알리되 오류로 끝내지 않는다.
+    # 근거를 못 찾은 답은 남기지 않는다. 다시 볼 내용이 없다.
+    if sources:
+        try:
+            conn = connect(repo)
+            save_ask(conn, get_repo_id(conn, repo), question, text, source_refs(sources))
+            conn.close()
+        except sqlite3.Error as exc:
+            typer.secho(f"기록에 남기지 못했습니다: {exc}", fg=typer.colors.YELLOW)
+
 
 @app.command()
 def report(
@@ -479,6 +493,9 @@ def history(
     한 번 단정한 것은 실수지만 계속 단정하는 것은 습관이고,
     이 도구가 알려주려는 것은 후자다.
 
+    질문 기록은 건수만 한 줄로 적는다. 답이 마크다운이라 터미널에 여러 건을
+    늘어놓으면 채점 기록이 묻힌다. 답과 근거는 웹 기록 탭에서 본다.
+
     Args:
         repo (Path): 대상 레포 루트.
         limit (int): 표시할 답변 수.
@@ -491,15 +508,17 @@ def history(
     answers = list_answers(conn, repo_id, limit)
     summary = verdict_summary(conn, repo_id)
     risky = repeated_assertions(conn, repo_id)
+    ask_count = count_asks(conn, repo_id)
 
     conn.close()
 
     if not answers:
-        typer.secho("아직 연습 기록이 없습니다.", fg=typer.colors.YELLOW)
+        typer.secho("아직 채점 기록이 없습니다.", fg=typer.colors.YELLOW)
         typer.echo(f"연습을 시작하세요:  whyd interview {shlex.quote(str(repo))}")
+        print_ask_count(ask_count, repo)
         raise typer.Exit(0)
 
-    typer.secho(f"\n연습 기록 ({len(answers)}건)", fg=typer.colors.CYAN, bold=True)
+    typer.secho(f"\n채점 기록 ({len(answers)}건)", fg=typer.colors.CYAN, bold=True)
     for a in answers:
         date = a["created_at"][:10]
         total = a["specificity"] + a["calibration"] + a["groundedness"]
@@ -521,6 +540,21 @@ def history(
         typer.secho("\n근거 없이 단정한 주장", fg=typer.colors.CYAN, bold=True)
         for r in risky:
             typer.echo(f"  - {r['claim'][:70]}")
+
+    print_ask_count(ask_count, repo)
+
+
+def print_ask_count(count: int, repo: Path) -> None:
+    """질문 기록이 있으면 건수와 볼 곳을 한 줄로 알린다.
+
+    Args:
+        count (int): 저장된 질문 수.
+        repo (Path): 대상 레포 루트. 웹을 여는 명령에 넣는다.
+    """
+    if not count:
+        return
+    typer.secho(f"\n질문 기록 {count}건", fg=typer.colors.CYAN, bold=True)
+    typer.echo(f"  답과 근거는 웹 기록 탭에서 봅니다:  whyd serve {shlex.quote(str(repo))}")
 
 
 @app.command(help="웹 화면을 띄운다. 레포 경로를 주면 그 레포를 연 채로 시작한다.")

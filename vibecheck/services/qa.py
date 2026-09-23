@@ -544,6 +544,32 @@ def rerank(
 
     return found
 
+def source_refs(chunks: list[Chunk]) -> list[dict]:
+    """근거 청크를 화면에 보내고 기록에 남길 모양으로 줄인다.
+
+    CLI가 찍는 것과 같은 네 가지(파일, 시작 줄, 끝 줄, 심볼)만 남기고 코드 본문은
+    뺀다. 본문까지 두면 응답과 기록이 커지는데, 화면은 경로로 관계도를 열 뿐이다.
+
+    웹 응답과 기록이 이 한 모양을 쓴다. 기록 화면은 질문 직후 화면을 그리던
+    코드로 지난 답을 그리므로, 모양이 둘로 갈라지면 한쪽이 조용히 깨진다.
+
+    Args:
+        chunks (list[Chunk]): answer가 돌려준 근거 청크.
+
+    Returns:
+        list[dict]: {"file", "start_line", "end_line", "symbol"} 목록.
+    """
+    return [
+        {
+            "file": c.file,
+            "start_line": c.start_line,
+            "end_line": c.end_line,
+            "symbol": c.symbol,
+        }
+        for c in chunks
+    ]
+
+
 def answer(
     question: str,
     chunks: list[Chunk],
