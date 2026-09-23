@@ -50,7 +50,7 @@ def api(tmp_path, monkeypatch):
     """
     made: list = []
 
-    def fake_build(overview, chunks, llm, quirk_groups=None):
+    def fake_build(overview, chunks, llm, quirk_groups=None, stale=0):
         """만든 횟수를 적어두고 정해진 리포트를 돌려준다."""
         made.append(True)
         return REPORT
@@ -100,3 +100,21 @@ def test_post_saves_report_that_get_returns(api):
     assert loaded["markdown"] == REPORT
     assert loaded["generated_at"]
     assert made == [True]
+
+
+def test_report_notes_skipped_chunks(monkeypatch):
+    """건너뛴 청크가 있으면 리포트 규모 절에 적고, 없으면 적지 않는다.
+
+    리포트 파일만 보는 사람은 CLI 경고를 보지 못해, 빠진 파일을 "함수가 없다"로 믿게 된다.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): 레포 요약(LLM)을 가짜로 바꾼다.
+    """
+    from vibecheck.core.overview import RepoOverview
+    from vibecheck.services import report as service
+
+    monkeypatch.setattr(service, "summarize_repo", lambda overview, llm: "한 줄 요약\n본문")
+    overview = RepoOverview(root="/r", name="r")
+
+    assert "청크 3개가 빠진 채" in service.build_report(overview, [], None, stale=3)
+    assert "빠진 채" not in service.build_report(overview, [], None)

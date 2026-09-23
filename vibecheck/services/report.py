@@ -147,6 +147,7 @@ def build_report(
     chunks: list[Chunk],
     llm: LLMClient,
     quirk_groups: list[QuirkGroup] | None = None,
+    stale: int = 0,
 ) -> str:
     """레포 리포트를 마크다운으로 조립한다.
 
@@ -156,6 +157,9 @@ def build_report(
         llm (LLMClient): 레포 요약 생성에 사용할 LLM 클라이언트.
         quirk_groups (list[QuirkGroup] | None): 특이 지점 그룹 목록.
             없으면 해당 절을 넣지 않는다.
+        stale (int): 인덱싱 뒤 바뀌어 빠진 청크 수. 있으면 규모 절에 적는다.
+            그 파일들은 모듈 지도에서 "정의된 함수나 클래스가 없습니다"로 나오는데,
+            리포트 파일만 보는 사람은 CLI 경고를 보지 못해 그 문장을 믿게 된다.
 
     Returns:
         str: 마크다운 리포트 전문.
@@ -200,6 +204,12 @@ def build_report(
         lines += [scope_line(overview.skipped_note), ""]
     for path in overview.skipped_large:
         lines += [f"크기 상한을 넘겨 제외: `{path}`", ""]
+    if stale:
+        lines += [
+            f"인덱싱 뒤 바뀐 파일의 청크 {stale}개가 빠진 채 만든 리포트입니다. "
+            "`whyd index`로 다시 인덱싱한 뒤 다시 만드세요.",
+            "",
+        ]
 
     lines += ["---", "", "## 3. 외부 의존성", ""]
     

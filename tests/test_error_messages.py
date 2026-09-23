@@ -217,7 +217,7 @@ def test_cli_usage_limit_prints_one_line(tmp_path, monkeypatch, capsys):
         monkeypatch (pytest.MonkeyPatch): 인덱스와 답변 함수를 바꿔 끼운다.
         capsys (pytest.CaptureFixture): 출력을 받는다.
     """
-    monkeypatch.setattr(cli, "open_or_exit", lambda repo: ([], str(tmp_path), {}))
+    monkeypatch.setattr(cli, "open_or_exit", lambda repo: ([], str(tmp_path), {}, 0))
     monkeypatch.setattr(cli, "VectorStore", lambda persist_dir: None)
     monkeypatch.setattr(cli, "AnthropicClient", lambda model: SimpleNamespace())
     monkeypatch.setattr(

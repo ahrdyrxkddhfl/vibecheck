@@ -403,12 +403,14 @@ def post_report(repo: RepoPath, index: Index) -> dict:
     Returns:
         dict: `markdown`, `path`, `generated_at`, `saved`(파일에 저장했는지).
     """
-    chunks, _chroma_dir, _stale, meta = index
+    chunks, _chroma_dir, stale, meta = index
 
     excludes = set(meta.get("exclude_dirs") or ()) or None
     overview = build_overview(str(repo), chunks, excludes)
     quirk_groups = group_quirks(find_quirks(str(repo), collect_files(str(repo), excludes)))
-    text = build_report(overview, chunks, AnthropicClient(model=SUMMARY_MODEL), quirk_groups)
+    text = build_report(
+        overview, chunks, AnthropicClient(model=SUMMARY_MODEL), quirk_groups, stale=stale
+    )
 
     path = report_path(repo)
     saved = False

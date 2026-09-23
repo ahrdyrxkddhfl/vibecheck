@@ -70,7 +70,7 @@ VERDICT_LABEL = {
 }
 
 
-def open_or_exit(repo: Path) -> tuple[list, str, dict]:
+def open_or_exit(repo: Path) -> tuple[list, str, dict, int]:
     """인덱스를 열고, 실패하면 안내 후 종료한다.
 
     open_index가 던지는 예외를 CLI 화면 출력으로 옮기는 자리다.
@@ -81,8 +81,10 @@ def open_or_exit(repo: Path) -> tuple[list, str, dict]:
         repo (Path): 대상 레포 루트. resolve된 상태여야 한다.
 
     Returns:
-        tuple[list, str, dict]: (청크 목록, 벡터 저장소 경로, 인덱싱 조건).
-            조건은 report와 interview가 제외 목록을 복원하는 데 쓴다.
+        tuple[list, str, dict, int]: (청크 목록, 벡터 저장소 경로, 인덱싱 조건,
+            건너뛴 청크 수). 조건은 report와 interview가 제외 목록을 복원하는 데
+            쓴다. 건너뛴 수는 경고로 찍는 데서 끝나지 않고 report가 리포트 파일에
+            적는다. 파일만 보는 사람은 이 경고를 보지 못한다.
     """
     try:
         chunks, chroma_dir, stale, meta = open_index(repo)
@@ -101,7 +103,7 @@ def open_or_exit(repo: Path) -> tuple[list, str, dict]:
             fg=typer.colors.YELLOW,
         )
 
-    return chunks, chroma_dir, meta
+    return chunks, chroma_dir, meta, stale
 
 
 def resolve_excludes(exclude: list[str] | None, meta: dict) -> set[str] | None:
@@ -260,7 +262,7 @@ def ask(
         show_sources (bool): 근거 청크 목록 출력 여부.
     """
     repo = repo.expanduser().resolve()
-    chunks, chroma_dir, _ = open_or_exit(repo)
+    chunks, chroma_dir, _, _ = open_or_exit(repo)
 
     text, sources = answer(
         question,
@@ -312,7 +314,7 @@ def report(
             제외 목록을 바꾸려면 새 값을 명시해야 한다.
     """
     repo = repo.expanduser().resolve()
-    chunks, _, meta = open_or_exit(repo)
+    chunks, _, meta, stale = open_or_exit(repo)
     excludes = resolve_excludes(exclude, meta)
 
     typer.echo("개요를 조립하는 중...")
@@ -325,7 +327,8 @@ def report(
 
     typer.echo("요약을 생성하는 중...")
     text = build_report(
-        overview, chunks, AnthropicClient(model=SUMMARY_MODEL), quirk_groups
+        overview, chunks, AnthropicClient(model=SUMMARY_MODEL), quirk_groups,
+        stale=stale,
     )
 
     target = output or report_path(repo)
@@ -354,7 +357,7 @@ def interview(
             report와 같은 규칙이라 두 산출물의 숫자가 어긋나지 않는다.
     """
     repo = repo.expanduser().resolve()
-    chunks, _, meta = open_or_exit(repo)
+    chunks, _, meta, _ = open_or_exit(repo)
     excludes = resolve_excludes(exclude, meta)
 
     overview = build_overview(str(repo), chunks, excludes)
@@ -463,7 +466,7 @@ def practice(
         typer.secho("답변이 비어 있습니다.", fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    chunks, chroma_dir, _ = open_or_exit(repo)
+    chunks, chroma_dir, _, _ = open_or_exit(repo)
 
     typer.echo("채점하는 중...")
     fb = grade(

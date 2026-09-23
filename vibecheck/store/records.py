@@ -4,7 +4,7 @@
 인덱스와 같은 자리에 두는 이유는 레포마다 자기 기록을 갖게 하기 위해서다.
 한 파일에 여러 레포 기록이 섞이면 학습 진단이 엉킨다.
 
-ORM을 쓰지 않고 sqlite3를 직접 쓴다. 테이블이 여섯 개뿐이고 쿼리도 단순해
+ORM을 쓰지 않고 sqlite3를 직접 쓴다. 테이블이 다섯 개뿐이고 쿼리도 단순해
 라이브러리를 얹으면 얻는 것보다 늘어나는 개념이 많다.
 """
 
@@ -66,17 +66,6 @@ CREATE TABLE IF NOT EXISTS asks (
     sources     TEXT NOT NULL,
     created_at  TEXT NOT NULL,
     parent_id   INTEGER REFERENCES asks(id)
-);
-
-CREATE TABLE IF NOT EXISTS typing_runs (
-    id           INTEGER PRIMARY KEY,
-    repo_id      INTEGER NOT NULL REFERENCES repos(id),
-    chunk_file   TEXT NOT NULL,
-    chunk_symbol TEXT NOT NULL,
-    line_no      INTEGER NOT NULL,
-    typos        INTEGER NOT NULL,
-    elapsed_ms   INTEGER NOT NULL,
-    created_at   TEXT NOT NULL
 );
 """
 
