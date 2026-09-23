@@ -3,12 +3,33 @@
 import os
 
 from anthropic import Anthropic
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from vibecheck.llm.base import LLMClient
 from vibecheck.llm.errors import MissingAPIKey
 
-load_dotenv()
+
+def load_env() -> None:
+    """.env 파일에서 API 키 같은 설정을 환경변수로 읽어 온다.
+
+    먼저 명령을 실행한 폴더에서 위로 올라가며 찾고, 없으면 이 코드 파일이 있는
+    폴더에서 위로 올라가며 찾는다.
+
+    인자 없는 load_dotenv()는 이 코드 파일의 위치에서만 찾는다. 편집 모드
+    (pip install -e .)에서는 코드가 레포 안에 있어 레포의 .env를 찾지만, 패키지로
+    설치하면 코드가 가상환경의 site-packages 안에 있어 사용자가 만든 .env를 끝내
+    찾지 못했다(2026-09-23, 깨끗한 가상환경에 휠을 설치해 재현). 그래서 실행한 폴더를
+    먼저 본다. 코드 위치도 계속 보는 것은 레포 밖에서 whyd를 실행하던 편집 모드
+    사용법을 깨지 않기 위해서다.
+
+    이미 설정된 환경변수는 덮어쓰지 않는다. 셸에서 export한 키가 .env보다 앞선다.
+    두 곳에 모두 .env가 있으면 먼저 읽은 실행 폴더 쪽 값이 남는다.
+    """
+    load_dotenv(find_dotenv(usecwd=True))
+    load_dotenv()
+
+
+load_env()
 
 SUMMARY_MODEL = "claude-haiku-4-5-20251001"
 """청크 요약과 리포트의 요약 문장에 쓰는 모델.
