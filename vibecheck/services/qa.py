@@ -626,13 +626,13 @@ def answer(
 if __name__ == "__main__":
     import sys
 
-    from vibecheck.llm.anthropic import AnthropicClient
+    from vibecheck.llm.anthropic import ANSWER_MODEL, AnthropicClient
     from vibecheck.services.indexer import index_repo
 
     target = "."
     question = sys.argv[1] if len(sys.argv) > 1 else "파일 수집은 어떻게 이루어지나요?"
 
-    llm = AnthropicClient(model="claude-sonnet-4-6")
+    llm = AnthropicClient(model=ANSWER_MODEL)
     chunks = index_repo(target, llm, verbose=True)
 
     store = VectorStore()

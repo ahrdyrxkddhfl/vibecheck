@@ -14,14 +14,13 @@ import sqlite3
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from vibecheck.llm.anthropic import AnthropicClient
+from vibecheck.llm.anthropic import ANSWER_MODEL, AnthropicClient
 from vibecheck.services.qa import answer, source_refs
 from vibecheck.store.records import connect, get_repo_id, save_ask
 from vibecheck.store.vector import VectorStore
 from vibecheck.web.deps import Index, RepoPath
 
 logger = logging.getLogger(__name__)
-from vibecheck.web.routers.report import ANSWER_MODEL
 
 router = APIRouter()
 

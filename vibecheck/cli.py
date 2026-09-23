@@ -27,7 +27,7 @@ import typer
 from vibecheck.core.collector import collect_files
 from vibecheck.core.overview import build_overview
 from vibecheck.core.quirks import find_quirks, group_quirks
-from vibecheck.llm.anthropic import AnthropicClient
+from vibecheck.llm.anthropic import ANSWER_MODEL, SUMMARY_MODEL, AnthropicClient
 from vibecheck.llm.errors import LLM_ERRORS, describe_llm_error
 from vibecheck.services.index_access import (
     IndexEmpty,
@@ -62,8 +62,6 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-SUMMARY_MODEL = "claude-haiku-4-5-20251001"
-ANSWER_MODEL = "claude-sonnet-4-6"
 
 VERDICT_LABEL = {
     "confirmed": ("확인됨", typer.colors.GREEN),

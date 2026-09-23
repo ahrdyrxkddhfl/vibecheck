@@ -17,20 +17,13 @@ from vibecheck.core.collector import collect_files
 from vibecheck.core.languages import LANGUAGES
 from vibecheck.core.overview import build_overview
 from vibecheck.core.quirks import find_quirks, group_quirks
-from vibecheck.llm.anthropic import AnthropicClient
+from vibecheck.llm.anthropic import ANSWER_MODEL, AnthropicClient
 from vibecheck.services.interview import STAGE_ORDER, build_questions
 from vibecheck.services.practice import grade
 from vibecheck.services.relations import file_relations
 from vibecheck.store.records import connect, get_repo_id, save_answer
 from vibecheck.store.vector import VectorStore
 from vibecheck.web.deps import Index, RepoPath
-
-ANSWER_MODEL = "claude-sonnet-4-6"
-"""채점에 쓰는 모델.
-
-요약과 달리 답변을 코드와 대조하는 판단이 필요해 상위 모델을 쓴다.
-CLI와 같은 값이어야 두 경로의 채점 결과가 비교 가능하다.
-"""
 
 router = APIRouter()
 
