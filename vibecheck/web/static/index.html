@@ -242,6 +242,12 @@
   .md th, .md td { border: 1px solid var(--line); padding: 0.3rem 0.6rem; text-align: left; }
   .md.plain { white-space: pre-wrap; }
   .md hr { border: 0; border-top: 1px solid var(--line); margin: 1.2rem 0; }
+  /* 답이 코드의 주석이나 문서를 옮겨 올 때 쓴다. 표시가 없으면 답의 말과
+     코드에 적힌 말이 구분되지 않는다. */
+  .md blockquote {
+    margin: 0.6rem 0; padding: 0.1rem 0 0.1rem 0.9rem;
+    border-left: 3px solid var(--line); color: var(--muted);
+  }
 
   .srcs { margin-top: 1.2rem; font-size: 0.82rem; }
   .srcs .src { display: flex; gap: 0.8rem; padding: 0.15rem 0; }
