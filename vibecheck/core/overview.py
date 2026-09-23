@@ -16,6 +16,7 @@ from pathlib import Path
 
 from vibecheck.core.collector import (
     build_module_map,
+    build_package_names,
     collect_source_files,
     format_skipped,
     group_by_extension,
@@ -439,7 +440,9 @@ def build_overview(
     collected = collect_source_files(root, exclude_dirs)
     files = collected.files
     module_map = build_module_map(files, root)
-    module_names = set(module_map)
+    # 패키지 이름은 내부 판별에만 더한다. 파일 하나를 가리키지 않아
+    # 간선을 만드는 module_map에는 넣지 않는다.
+    module_names = set(module_map) | build_package_names(files)
     external, stdlib, internal_count = split_dependencies(l1 or l2, module_names)
 
     # 청크가 생긴 파일을 그대로 쓴다. README나 pyproject는 수집 대상이 아니면서

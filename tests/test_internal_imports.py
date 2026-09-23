@@ -3,7 +3,9 @@
 Java에서 자기 패키지가 외부 의존성 목록에 올라가던 문제를 막는다. 판별은
 이름을 앞에서부터 잘라 파일 이름과 대조하는데, static 멤버나 중첩 클래스가
 끝에 붙은 import는 그대로는 어떤 파일과도 만나지 않았다. 대조 전에 언어
-설정(import_target)으로 줄여 이 문제를 푼다.
+설정(import_target)으로 줄여 이 문제를 푼다. 패키지 와일드카드(import com.a.*)는
+파일 하나를 가리키지 않으므로, 파일들이 선언한 패키지 이름을 모듈 이름 집합에
+더해 푼다.
 
 청크는 SimpleNamespace로 흉내 낸다. 두 함수가 청크에서 읽는 것은 file과
 imports뿐이다.
@@ -14,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from vibecheck.core import java
+from vibecheck.core.collector import build_package_names
 from vibecheck.core.languages import PYTHON
 from vibecheck.core.overview import build_import_edges, split_dependencies
 
@@ -107,4 +110,77 @@ def test_python_matching_unchanged():
     )
 
     assert "httpx" in third_party
+    assert internal_count == 1
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("package com.claimtrace.domain;\n\npublic class Claim {}\n", "com.claimtrace.domain"),
+        (
+            "/**\n * package com.fake.inside;\n */\npackage com.claimtrace.domain;\n",
+            "com.claimtrace.domain",
+        ),
+        ("@NonNullApi\npackage com.claimtrace.domain;\n", "com.claimtrace.domain"),
+        ("public class NoPackage {}\n", None),
+    ],
+)
+def test_declared_package(source, expected):
+    """줄 맨 앞의 package 선언만 읽고, Javadoc 속 글이나 애노테이션에 속지 않는다.
+
+    Args:
+        source (str): 파일 원문.
+        expected (str | None): 읽어야 할 패키지 이름. 선언이 없으면 None.
+    """
+    assert java.declared_package(source) == expected
+
+
+def test_build_package_names_reads_only_declared_packages(tmp_path):
+    """Java 파일의 선언만 모으고, 선언이 없는 파일과 파이썬 파일은 건너뛴다.
+
+    Args:
+        tmp_path (Path): pytest가 주는 임시 폴더.
+    """
+    domain = tmp_path / "src/main/java/com/claimtrace/domain"
+    domain.mkdir(parents=True)
+    (domain / "Claim.java").write_text("package com.claimtrace.domain;\nclass Claim {}\n")
+    (domain / "Rule.java").write_text("package com.claimtrace.domain;\nclass Rule {}\n")
+    (tmp_path / "Loose.java").write_text("class Loose {}\n")
+    (tmp_path / "tool.py").write_text("package = 1\n")
+
+    files = [
+        domain / "Claim.java",
+        domain / "Rule.java",
+        tmp_path / "Loose.java",
+        tmp_path / "tool.py",
+    ]
+
+    assert build_package_names(files) == {"com.claimtrace.domain"}
+
+
+def test_java_own_package_wildcard_stays_internal(tmp_path):
+    """자기 패키지 와일드카드는 내부로, 외부 와일드카드는 라이브러리로 가른다.
+
+    고치기 전에는 com.claimtrace.service가 어떤 모듈 이름과도 만나지 않아
+    서드파티 목록에 com.claimtrace가 올라갔다. 패키지 이름은 build_overview와
+    같은 방식으로, 파일의 선언을 읽어 모듈 이름 집합에 더한다.
+
+    Args:
+        tmp_path (Path): pytest가 주는 임시 폴더.
+    """
+    service = tmp_path / "ClaimService.java"
+    service.write_text("package com.claimtrace.service;\nclass ClaimService {}\n")
+
+    chunk = SimpleNamespace(
+        file=JAVA_FILE,
+        imports=[
+            "com.claimtrace.service",
+            "org.springframework.web.bind.annotation",
+        ],
+    )
+    module_names = set(JAVA_MODULES) | build_package_names([service])
+
+    third_party, _, internal_count = split_dependencies([chunk], module_names)
+
+    assert third_party == ["org.springframework"]
     assert internal_count == 1

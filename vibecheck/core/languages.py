@@ -68,6 +68,11 @@ class LanguageSpec:
             모듈 이름으로 줄인다. 내부 판별과 import 간선이 원래 이름 대신 이 결과로
             대조한다. 저장된 import 이름은 원문 그대로 두고 대조할 때만 줄이므로,
             규칙을 바꿔도 다시 인덱싱할 필요가 없다.
+        package_of (Callable | None): 파일 원문을 받아 그 파일이 속한 패키지
+            이름을 돌려준다. 없으면 None. 패키지 이름이 파일 경로와 별개로 선언되는
+            언어에서만 둔다. 그 이름을 통째로 import할 수 있어서(Java의 import
+            com.a.*), 내부 판별에 패키지 이름이 따로 필요하다. 파이썬은 패키지도
+            __init__.py라는 파일이라 모듈 이름에 이미 들어 있다.
         doc_comment (bytes | None): 선언 바로 앞에 붙어 그 선언의 설명이 되는
             주석의 시작 표시. 설명이 선언 본문 안에 있는 언어는 None이다.
         type_named_files (bool): 최상위 타입 이름이 곧 파일 이름이라는 것이 언어
@@ -93,6 +98,7 @@ class LanguageSpec:
     dependency_of: Callable[[str], tuple[str, bool]]
     entry_evidence: Callable[[str], str | None]
     import_target: Callable[[str], str] = keep_import_name
+    package_of: Callable[[str], str | None] | None = None
     doc_comment: bytes | None = None
     type_named_files: bool = False
     collect_type_refs: Callable[[object, bytes], dict[str, int]] | None = None
@@ -125,6 +131,7 @@ JAVA = LanguageSpec(
     dependency_of=java.dependency_name,
     entry_evidence=java.entry_evidence,
     import_target=java.import_target,
+    package_of=java.declared_package,
     doc_comment=java.DOC_COMMENT_PREFIX,
     type_named_files=True,
     collect_type_refs=java.type_references,

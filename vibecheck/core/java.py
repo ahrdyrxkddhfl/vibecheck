@@ -176,6 +176,14 @@ javax 아래에는 JDK 밖에서 오는 것도 일부 있지만(예전의 javax.
 쪽으로 틀리는 편이, java.util이 외부 라이브러리로 올라오는 것보다 낫다.
 """
 
+PACKAGE_PATTERN = re.compile(r"^\s*package\s+([\w.]+)\s*;", re.MULTILINE)
+"""파일의 package 선언.
+
+줄 맨 앞에서만 찾는다. Javadoc 안에 "package x;"라는 글이 있어도 그 줄은
+*로 시작해 걸리지 않는다. package-info.java처럼 선언 앞에 애노테이션이
+붙어 있어도 선언은 제 줄에 있다.
+"""
+
 MAIN_PATTERN = re.compile(r"\bstatic\s+void\s+main\s*\(")
 """직접 실행할 수 있는 클래스의 main 메서드 선언."""
 
@@ -211,6 +219,26 @@ def dependency_name(import_name: str) -> tuple[str, bool]:
     return ".".join(package[:2]), import_name.startswith(STDLIB_PREFIXES)
 
 
+def declared_package(source: str) -> str | None:
+    """파일이 속한 패키지 이름을 package 선언에서 읽는다.
+
+    와일드카드 import(import com.a.*)가 레포 안을 가리키는지 가를 재료다.
+    모듈 이름 집합에는 클래스 이름만 있어 패키지 이름 com.a와 대조되지 않는다.
+
+    경로에서 짐작하지 않고 선언을 읽는다. src/main/java/com/a/B.java에서
+    패키지가 어디서 시작하는지는 경로만으로 정해지지 않는다. 선언은 컴파일러가
+    따르는 이름 그 자체라 틀릴 일이 없다.
+
+    Args:
+        source (str): 파일 원문.
+
+    Returns:
+        str | None: 패키지 이름. 선언이 없으면(기본 패키지) None.
+    """
+    match = PACKAGE_PATTERN.search(source)
+    return match.group(1) if match else None
+
+
 def import_target(import_name: str) -> str:
     """import 이름을 그것이 가리키는 파일의 이름으로 줄인다.
 
@@ -224,7 +252,8 @@ def import_target(import_name: str) -> str:
     클래스를 가를 때 쓰는 관례와 같다.
 
     대문자 조각이 없으면 받은 이름 그대로 둔다. 와일드카드가 남긴 패키지
-    이름(com.a)이 여기에 해당하며, 파일 하나를 가리키지 않는다.
+    이름(com.a)이 여기에 해당하며, 파일 하나를 가리키지 않는다. 그 이름은
+    모듈 이름 집합에 더해 둔 내부 패키지 이름(declared_package)과 대조된다.
 
     Args:
         import_name (str): extract_imports가 남긴 import 이름.

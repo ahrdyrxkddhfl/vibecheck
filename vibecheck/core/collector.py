@@ -8,7 +8,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from vibecheck.core.languages import supported_extensions
+from vibecheck.core.languages import spec_for, supported_extensions
 
 EXTENSIONS = supported_extensions()
 """수집 대상 확장자.
@@ -336,17 +336,52 @@ def build_module_names(files: list[Path], root: str) -> set[str]:
     import 대상이 레포 내부인지 외부 라이브러리인지 가르려면
     "내부에 무엇이 있는지" 목록이 먼저 필요하다.
 
+    계산은 build_module_map에 맡기고 키만 꺼낸다.
+    같은 계산을 두 벌로 두면 한쪽만 고쳤을 때 이름 집합과 대응표가
+    어긋나는데, 그 차이는 예외 없이 조용히 진행된다.
+
     Args:
         files (list[Path]): collect_files가 수집한 경로 목록.
         root (str): 레포 루트 경로. 기준점이 루트를 벗어날 때의 안전망으로 쓴다.
-        계산은 build_module_map에 맡기고 키만 꺼낸다.
-        같은 계산을 두 벌로 두면 한쪽만 고쳤을 때 이름 집합과 대응표가
-        어긋나는데, 그 차이는 예외 없이 조용히 진행된다.
 
     Returns:
         set[str]: 점으로 구분된 모듈 이름 집합.
     """
     return set(build_module_map(files, root))
+
+
+def build_package_names(files: list[Path]) -> set[str]:
+    """파일들이 선언한 패키지 이름을 모은다.
+
+    모듈 이름 집합은 파일마다 이름 하나를 붙여 만든다. Java 파일은 클래스
+    이름(B)만 받으므로 import com.a.*가 남기는 패키지 이름 com.a는 어떤 파일과도
+    대조되지 않아, 자기 패키지를 통째로 가져다 쓰면 외부 의존성으로 올라간다.
+    이 집합을 모듈 이름 집합에 더하면 그 이름이 내부로 판정된다.
+
+    모듈 대응표(build_module_map)에는 넣지 않는다. 패키지는 파일 하나를
+    가리키지 않아 import 간선의 도착지가 될 수 없다.
+
+    패키지 선언이 따로 없는 언어(package_of가 None)의 파일은 읽지 않는다.
+
+    Args:
+        files (list[Path]): collect_files가 수집한 경로 목록.
+
+    Returns:
+        set[str]: 점으로 구분된 패키지 이름 집합.
+    """
+    names: set[str] = set()
+
+    for path in files:
+        spec = spec_for(path)
+        if spec is None or spec.package_of is None:
+            continue
+
+        source = Path(path).read_text(encoding="utf-8", errors="replace")
+        package = spec.package_of(source)
+        if package:
+            names.add(package)
+
+    return names
 
 
 def is_internal_import(dotted: str, module_names: set[str]) -> bool:
