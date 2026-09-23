@@ -11,7 +11,9 @@ import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from vibecheck.core.collector import collect_files
@@ -19,11 +21,17 @@ from vibecheck.core.languages import LANGUAGES
 from vibecheck.core.overview import build_overview
 from vibecheck.core.quirks import find_quirks, group_quirks
 from vibecheck.llm.anthropic import ANSWER_MODEL, SUMMARY_MODEL, AnthropicClient
-from vibecheck.services.interview import STAGE_ORDER, build_questions
+from vibecheck.services.interview import STAGE_ORDER, question_sets
 from vibecheck.services.practice import grade
 from vibecheck.services.relations import file_relations
 from vibecheck.services.report import build_report, report_path
-from vibecheck.store.records import connect, get_repo_id, save_answer
+from vibecheck.store.records import (
+    answered_questions,
+    connect,
+    db_path,
+    get_repo_id,
+    save_answer,
+)
 from vibecheck.store.vector import VectorStore
 from vibecheck.web.deps import Index, RepoPath
 
@@ -111,8 +119,33 @@ def get_overview(repo: RepoPath, index: Index) -> dict:
 
     return data
 
+def answered_texts(repo: Path) -> set[str]:
+    """레포에서 채점받은 적 있는 질문 문장을 꺼낸다.
+
+    기록 파일이 없으면 만들지 않고 빈 집합을 돌려준다. 여는 것만으로 파일을
+    만들면 경로만 친 폴더에 .vibecheck가 생긴다(services.history와 같은 이유).
+
+    Args:
+        repo (Path): 정규화된 레포 경로.
+
+    Returns:
+        set[str]: 질문 문장 집합.
+    """
+    if not db_path(repo).exists():
+        return set()
+    conn = connect(repo)
+    try:
+        return answered_questions(conn, get_repo_id(conn, repo))
+    finally:
+        conn.close()
+
+
 @router.get("/interview")
-def get_interview(repo: RepoPath, index: Index) -> dict:
+def get_interview(
+    repo: RepoPath,
+    index: Index,
+    set_no: int = Query(1, ge=1, alias="set", description="세트 번호. 1부터 센다."),
+) -> dict:
     """면접 예상질문을 JSON으로 반환한다. LLM을 부르지 않는다.
 
     질문 생성은 전부 조립이라 과금이 없다. 개요와 달리 GET으로 두어도
@@ -129,12 +162,24 @@ def get_interview(repo: RepoPath, index: Index) -> dict:
     특이 지점은 디스크를 다시 읽어 계산한다. 인덱스에 담기지 않는
     정보이고, 레포 31개 파일 기준 0.02초라 캐싱할 만한 비용이 아니다.
 
+    질문은 세트로 나뉜다(services.interview.question_sets). 첫 세트는 예전 질문
+    그대로라 whyd practice의 번호와 맞는다. 번호는 세트를 넘어 이어 매겨, 어느
+    세트의 질문이든 번호가 겹치지 않는다.
+
+    채점받은 적 있는 질문에는 `answered`를 싣는다. 세트를 다 풀었는지 화면이
+    알려주고 다음 세트로 넘어가게 하는 재료다.
+
     Args:
         repo: 정규화된 레포 경로.
         index: `open_index()`의 반환값.
+        set_no: 보여줄 세트 번호. 주소에서는 `?set=`로 받는다.
 
     Returns:
-        dict: `stages`(단계별 질문 묶음)와 `total`, `stale_count`.
+        dict: `stages`(단계별 질문 묶음), `total`(이 세트의 질문 수), `set`,
+            `set_count`, `answered_count`(이 세트에서 답한 질문 수), `stale_count`.
+
+    Raises:
+        HTTPException: 없는 세트 번호면 404.
     """
     chunks, _chroma_dir, stale, meta = index
 
@@ -142,10 +187,16 @@ def get_interview(repo: RepoPath, index: Index) -> dict:
     overview = build_overview(str(repo), chunks, excludes)
     quirk_groups = group_quirks(find_quirks(str(repo), collect_files(str(repo), excludes)))
 
-    questions = build_questions(overview, quirk_groups)
+    sets = question_sets(overview, chunks, repo, quirk_groups)
+    if set_no > len(sets):
+        raise HTTPException(
+            status_code=404, detail=f"세트는 1부터 {len(sets)}까지 있습니다."
+        )
+    questions = sets[set_no - 1]
+    answered = answered_texts(repo)
 
     stages = []
-    number = 0
+    number = sum(len(s) for s in sets[: set_no - 1])
 
     for stage in STAGE_ORDER:
         staged = [q for q in questions if q.stage == stage]
@@ -162,6 +213,7 @@ def get_interview(repo: RepoPath, index: Index) -> dict:
                     "answerable": question.answerable,
                     "can_say": question.can_say,
                     "risky": question.risky,
+                    "answered": question.text in answered,
                 }
             )
 
@@ -169,7 +221,10 @@ def get_interview(repo: RepoPath, index: Index) -> dict:
 
     return {
         "stages": stages,
-        "total": number,
+        "total": len(questions),
+        "set": set_no,
+        "set_count": len(sets),
+        "answered_count": sum(1 for q in questions if q.text in answered),
         "stale_count": stale,
     }
 

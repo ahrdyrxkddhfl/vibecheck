@@ -311,6 +311,26 @@ def save_answer(
     conn.commit()
     return answer_id
 
+def answered_questions(conn: sqlite3.Connection, repo_id: int) -> set[str]:
+    """채점받은 적 있는 질문 문장을 모은다.
+
+    면접 질문 탭이 답한 질문에 표시를 다는 재료다. 채점 기록은 질문 id가 아니라
+    질문 문장을 남기므로(save_answer) 문장으로 맞춘다. 질문 목록을 다시 만들어도
+    같은 질문이면 문장이 같아 표시가 이어진다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+        repo_id (int): 대상 레포 id.
+
+    Returns:
+        set[str]: 질문 문장 집합.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT question_text FROM answers WHERE repo_id = ?", (repo_id,)
+    ).fetchall()
+    return {r["question_text"] for r in rows}
+
+
 def list_answers(conn: sqlite3.Connection, repo_id: int, limit: int = 20) -> list:
     """최근 채점 기록을 시간 역순으로 가져온다.
 

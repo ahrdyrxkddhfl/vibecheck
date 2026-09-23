@@ -141,6 +141,19 @@
     flex: none; min-width: 1.8rem;
   }
   .qtext { font-size: 0.98rem; font-weight: 500; }
+  .icode {
+    font-family: var(--mono); font-size: 0.88em;
+    background: #f1ede7; padding: 0.05em 0.3em; border-radius: 3px;
+  }
+  /* 채점받은 질문. 세트 안에서 무엇이 남았는지 훑어 보이게 한다. */
+  .qdone { flex: none; font-size: 0.75rem; color: #2f6b3a; font-weight: 600; }
+  /* 세트 넘기기. 위에는 어디쯤인지, 아래에는 다 풀었을 때 다음으로 가는 길을 둔다. */
+  .qset { display: flex; gap: 0.6rem; align-items: center; margin: 1.2rem 0 0; font-size: 0.85rem; }
+  .qset .where { color: var(--muted); margin-right: auto; }
+  .qset button { padding: 0.35rem 0.8rem; font-size: 0.8rem; }
+  .qset button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  .qset button:disabled { opacity: 0.4; cursor: default; }
+  .qnext { margin-top: 1.5rem; font-size: 0.88rem; }
 
   /* 코드로 답할 수 있는지 여부가 이 화면에서 가장 중요한 구분이다.
      같은 회색으로 두면 "단정하면 위험한 것"을 그냥 참고 사항으로 읽는다. */
@@ -852,7 +865,7 @@ function render(d) {
  * @param {string} repo - 대상 레포 경로.
  * @returns {HTMLElement} 입력창과 결과 영역을 담은 요소.
  */
-function answerBox(q, repo) {
+function answerBox(q, repo, onGraded) {
   const wrap = el("div", "answer");
 
   const input = el("textarea");
@@ -897,6 +910,9 @@ function answerBox(q, repo) {
       note.textContent = data.saved === false
         ? "채점은 받았지만 기록에 남기지 못했습니다."
         : "";
+      // 기록에 남은 채점만 답한 것으로 센다. 서버가 다음에 세트를 그릴 때도
+      // 기록으로 가르므로, 화면과 기록이 같은 말을 하게 한다.
+      if (data.saved !== false && onGraded) onGraded();
     } catch (err) {
       note.textContent = err.message;
     } finally {
@@ -921,13 +937,111 @@ function answerBox(q, repo) {
  * @param {object} d - /api/interview 응답.
  * @param {string} repo - 사용자가 입력한 경로. 안내 명령줄에 그대로 넣는다.
  */
+/** 가장 최근 세트 요청의 번호. 빠르게 넘길 때 늦게 온 옛 세트가 화면을 덮지 않게 한다. */
+let interviewSeq = 0;
+
+/**
+ * 면접 질문 세트 하나를 받아 그린다. LLM을 부르지 않는다.
+ *
+ * @param {number} n - 세트 번호. 1부터.
+ */
+async function loadInterviewSet(n) {
+  if (!currentRepo) return;
+  const my = ++interviewSeq;
+  try {
+    const d = await body(await fetch(
+      "/api/interview?path=" + encodeURIComponent(currentRepo) + "&set=" + n));
+    if (my !== interviewSeq) return;
+    renderInterview(d, currentRepo);
+    $("panel-interview").scrollIntoView && $("panel-interview").scrollIntoView({ block: "start" });
+  } catch (err) {
+    if (my === interviewSeq) $("questions").replaceChildren(el("div", "empty", err.message));
+  }
+}
+
+/**
+ * 세트 위치와 이전·다음 버튼을 만든다.
+ *
+ * @param {object} d - /api/interview 응답.
+ * @returns {HTMLElement} 세트 넘기기 줄.
+ */
+function setBar(d) {
+  const bar = el("div", "qset");
+  const where = el("span", "where",
+    "세트 " + d.set + " / " + d.set_count + " · 답한 질문 " + d.answered_count + " / " + d.total);
+  where.dataset.role = "where";
+  const prev = el("button", "ghost", "← 이전 세트");
+  prev.disabled = d.set <= 1;
+  prev.addEventListener("click", () => loadInterviewSet(d.set - 1));
+  const next = el("button", "ghost", "다음 세트 →");
+  next.disabled = d.set >= d.set_count;
+  next.addEventListener("click", () => loadInterviewSet(d.set + 1));
+  bar.append(where, prev, next);
+  return bar;
+}
+
+/**
+ * 세트 안에서 답한 질문 수를 다시 세어 위치 줄과 끝 안내를 고친다.
+ *
+ * 채점을 받으면 서버에 다시 묻지 않고 화면의 표시만 센다. 요청을 줄이고,
+ * 방금 쓴 답이 사라지지 않게 한다.
+ *
+ * @param {object} d - 이 세트를 그린 /api/interview 응답.
+ */
+function refreshSetProgress(d) {
+  const done = document.querySelectorAll("#questions .qbox.done").length;
+  const where = document.querySelector('#questions [data-role="where"]');
+  if (where) {
+    where.textContent = "세트 " + d.set + " / " + d.set_count + " · 답한 질문 " + done + " / " + d.total;
+  }
+  const hint = $("qnext");
+  if (!hint) return;
+  if (done < d.total) {
+    hint.textContent = "";
+  } else if (d.set < d.set_count) {
+    hint.textContent = "이 세트를 다 풀었습니다. 다음 세트로 넘어가세요.";
+  } else {
+    hint.textContent = "준비된 질문을 모두 풀었습니다. 코드를 고치고 다시 인덱싱하면 질문이 달라집니다.";
+  }
+}
+
+/**
+ * 질문 카드에 답한 표시를 단다. 이미 있으면 그대로 둔다.
+ *
+ * @param {HTMLElement} box - 질문 카드.
+ */
+function markAnswered(box) {
+  if (box.classList.contains("done")) return;
+  box.classList.add("done");
+  box.querySelector(".qhead").append(el("span", "qdone", "✓ 답함"));
+}
+
+/**
+ * 백틱으로 감싼 부분을 코드 글꼴로 그려 넣는다.
+ *
+ * 질문 문장은 CLI의 마크다운 출력과 같은 글이라 이름을 백틱으로 감싼다. 글자
+ * 그대로 넣으면 화면에 백틱이 보인다. HTML로 해석하지 않고 글자 조각과 code 요소를
+ * 이어 붙여, 질문에 어떤 문자가 들어 있어도 태그로 읽히지 않게 한다.
+ *
+ * @param {HTMLElement} node - 채울 요소.
+ * @param {string} text - 백틱이 섞인 글.
+ * @returns {HTMLElement} 채운 요소.
+ */
+function codeText(node, text) {
+  text.split("`").forEach((part, i) => {
+    if (!part) return;
+    node.append(i % 2 ? el("code", "icode", part) : document.createTextNode(part));
+  });
+  return node;
+}
+
 function renderInterview(d, repo) {
   if (!d.total) {
     $("questions").replaceChildren(el("div", null, "만들 수 있는 질문이 없습니다."));
     return;
   }
 
-  const nodes = [];
+  const nodes = [setBar(d)];
 
   // 아래 목록을 답으로 오해하면 읽고 넘어가게 된다.
   // 먼저 스스로 답해보다 막히는 지점을 만나는 것이 이 화면의 목적이다.
@@ -940,7 +1054,7 @@ function renderInterview(d, repo) {
       const box = el("div", "qbox");
 
       const head = el("div", "qhead");
-      head.append(el("span", "qno", "Q" + q.no), el("span", "qtext", q.text));
+      head.append(el("span", "qno", "Q" + q.no), codeText(el("span", "qtext"), q.text));
       box.append(head);
 
       // 코드로 답할 수 있는지가 이 화면에서 가장 중요한 구분이다.
@@ -958,7 +1072,7 @@ function renderInterview(d, repo) {
         const fold = el("details", "qfold");
         fold.append(el("summary", null, "코드로 뒷받침되는 사실 (" + q.can_say.length + ")"));
         const list = el("dl", "qlist");
-        list.append(...q.can_say.map((t) => el("dd", null, t)));
+        list.append(...q.can_say.map((t) => codeText(el("dd"), t)));
         fold.append(list);
 
         box.append(fold);
@@ -969,16 +1083,24 @@ function renderInterview(d, repo) {
         // 봐야 하는 것이다.
         const list = el("dl", "qlist");
         list.append(el("dt", null, "근거 없이 말하면 무너지는 것"));
-        list.append(...q.risky.map((t) => el("dd", null, t)));
+        list.append(...q.risky.map((t) => codeText(el("dd"), t)));
         box.append(list);
       }
-      box.append(answerBox(q, repo));
+      box.append(answerBox(q, repo, () => {
+        markAnswered(box);
+        refreshSetProgress(d);
+      }));
+      if (q.answered) markAnswered(box);
 
       nodes.push(box);
     }
   }
 
+  nodes.push(el("div", "qnext"));
+  nodes[nodes.length - 1].id = "qnext";
+  nodes.push(setBar(d));
   $("questions").replaceChildren(...nodes);
+  refreshSetProgress(d);
 }
 
 
