@@ -41,7 +41,7 @@ from vibecheck.services.indexer import index_repo
 from vibecheck.services.interview import build_questions, format_questions
 from vibecheck.services.practice import grade
 from vibecheck.services.qa import answer, source_refs
-from vibecheck.services.report import build_report
+from vibecheck.services.report import build_report, report_path
 from vibecheck.store.records import (
     connect,
     count_asks,
@@ -328,7 +328,7 @@ def report(
         overview, chunks, AnthropicClient(model=SUMMARY_MODEL), quirk_groups
     )
 
-    target = output or (repo / "WHYD_REPORT.md")
+    target = output or report_path(repo)
     target.write_text(text, encoding="utf-8")
 
     typer.secho(f"\n리포트 생성 완료: {target}", fg=typer.colors.GREEN)

@@ -9,11 +9,50 @@ LLM 호출은 레포 요약 한 번뿐이고 나머지는 조립이다.
 """
 
 from datetime import datetime
+from pathlib import Path
 
+from vibecheck.core.languages import LANGUAGES
 from vibecheck.core.quirks import QuirkGroup
 from vibecheck.core.overview import RepoOverview, summarize_repo
 from vibecheck.llm.base import LLMClient
 from vibecheck.models import Chunk
+
+REPORT_FILENAME = "WHYD_REPORT.md"
+"""리포트를 저장하는 파일 이름. 레포 루트에 둔다.
+
+CLI(whyd report)와 웹 리포트 탭이 같은 파일을 쓴다. 한쪽에서 만든 리포트를
+다른 쪽에서 그대로 연다.
+"""
+
+
+def report_path(repo: Path) -> Path:
+    """레포의 리포트 파일 경로를 만든다.
+
+    Args:
+        repo (Path): 대상 레포 루트.
+
+    Returns:
+        Path: 리포트 파일 경로.
+    """
+    return repo / REPORT_FILENAME
+
+
+def scope_line(skipped_note: str) -> str:
+    """분석하지 못한 파일 안내 뒤에 무엇만 분석하는지를 붙인다.
+
+    언어 이름을 문장에 적어두지 않고 지원 언어 목록에서 만든다. Java를 더한 뒤에도
+    리포트는 "파이썬 파일만 분석합니다"라고 적고 있었다. 웹 개요 화면도 같은
+    목록에서 문구를 만든다.
+
+    Args:
+        skipped_note (str): 분석하지 못한 파일을 확장자별로 센 안내.
+
+    Returns:
+        str: 리포트에 넣을 한 줄.
+    """
+    labels = ", ".join(spec.label for spec in LANGUAGES)
+    return f"{skipped_note}. {labels} 파일만 분석합니다."
+
 
 FOLD_THRESHOLD = 5
 """심볼 목록을 접어둘 기준 개수.
@@ -134,7 +173,7 @@ def build_report(
     lines = [
         f"# {overview.name}",
         "",
-        f"> `whyd report`로 생성 · {datetime.now():%Y-%m-%d %H:%M}",
+        f"> VibeCheck로 생성 · {datetime.now():%Y-%m-%d %H:%M}",
         "",
         "---",
         "",
@@ -156,9 +195,9 @@ def build_report(
     ]
 
     # 분석 범위를 규모 바로 뒤에 밝힌다. 위의 숫자가 레포 전체가 아니라
-    # 파이썬 파일만 센 것이라는 사실은 숫자와 떨어지면 읽히지 않는다.
+    # 지원 언어 파일만 센 것이라는 사실은 숫자와 떨어지면 읽히지 않는다.
     if overview.skipped_note:
-        lines += [f"{overview.skipped_note}. 파이썬 파일만 분석합니다.", ""]
+        lines += [scope_line(overview.skipped_note), ""]
     for path in overview.skipped_large:
         lines += [f"크기 상한을 넘겨 제외: `{path}`", ""]
 

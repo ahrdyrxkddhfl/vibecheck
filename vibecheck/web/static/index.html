@@ -247,6 +247,13 @@
   .md th, .md td { border: 1px solid var(--line); padding: 0.3rem 0.6rem; text-align: left; }
   .md.plain { white-space: pre-wrap; }
   .md hr { border: 0; border-top: 1px solid var(--line); margin: 1.2rem 0; }
+  .md details { margin: 0.4rem 0; }
+  .md summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
+  /* 리포트 탭. 버튼과 안내를 한 줄에 두고, 리포트 본문은 그 아래에 그린다. */
+  .rrow { display: flex; gap: 0.6rem; align-items: center; margin: 0.9rem 0 0.4rem; }
+  .rrow button { padding: 0.45rem 0.9rem; font-size: 0.85rem; }
+  .rrow button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  .rrow .note { font-size: 0.78rem; color: var(--faint); }
   /* 답이 코드의 주석이나 문서를 옮겨 올 때 쓴다. 표시가 없으면 답의 말과
      코드에 적힌 말이 구분되지 않는다. */
   .md blockquote {
@@ -353,6 +360,7 @@
   <div id="result" hidden>
     <div class="tabs">
       <button class="tab on" data-panel="overview">개요</button>
+      <button class="tab" data-panel="report">리포트</button>
       <button class="tab" data-panel="ask">질문</button>
       <button class="tab" data-panel="interview">면접 질문</button>
       <button class="tab" data-panel="graph">관계도</button>
@@ -372,6 +380,15 @@
 
       <h2>모듈 지도</h2>
       <div id="files"></div>
+    </div>
+
+    <div id="panel-report" hidden>
+      <div class="rrow">
+        <button id="rgo">리포트 만들기</button>
+        <button id="rdown" class="ghost" hidden>.md 내려받기</button>
+        <span class="note" id="rnote"></span>
+      </div>
+      <div id="rbody"></div>
     </div>
 
     <div id="panel-ask" hidden>
@@ -441,6 +458,9 @@ function showTab(name) {
   // 기록은 탭을 열 때마다 새로 받는다. 면접 질문 탭에서 방금 채점한 답이
   // 바로 보여야 하고, 기록은 인덱스와 달리 화면을 보는 사이에도 늘어난다.
   if (name === "history") loadHistory();
+  // 리포트는 파일에 저장돼 있어 열 때마다 읽어도 요금이 없다. 다른 곳(CLI)에서
+  // 새로 만들었으면 그것이 보인다.
+  if (name === "report") loadReport();
 }
 
 for (const tab of document.querySelectorAll(".tab")) {
@@ -496,6 +516,7 @@ let currentRepo = "";
 async function analyze(path) {
   currentRepo = path;
   resetAsk();
+  resetReport();
   $("go").disabled = true;
   $("msg").textContent = "분석하는 중...";
   $("result").hidden = true;
@@ -1567,6 +1588,121 @@ $("askq").addEventListener("keydown", (e) => {
     sendAsk();
   }
 });
+
+/** 가장 최근 리포트 요청의 번호. 다른 레포로 옮긴 뒤 늦게 온 응답이 화면을 덮지 않게 한다. */
+let reportSeq = 0;
+
+/** 리포트를 만드는 중인지. 그동안 탭을 다시 열어도 옛 파일로 덮지 않는다. */
+let reportBusy = false;
+
+/** 지금 보여주는 리포트 원문. 내려받기에 쓴다. */
+let reportText = "";
+
+/**
+ * 리포트 탭을 비운다. 다른 레포를 열었을 때 이전 레포의 리포트가 남지 않게 한다.
+ */
+function resetReport() {
+  reportSeq++;
+  reportBusy = false;
+  reportText = "";
+  $("rbody").replaceChildren();
+  $("rnote").textContent = "";
+  $("rdown").hidden = true;
+  $("rgo").disabled = false;
+  $("rgo").textContent = "리포트 만들기";
+}
+
+/**
+ * 리포트를 그리고, 언제 만든 어느 파일인지 밝힌다.
+ *
+ * 질문 탭 답변과 같은 renderMarkdown으로 그린다. 리포트 안의 접기(details)도
+ * 걸러지지 않고 그대로 동작한다.
+ *
+ * @param {object} d - /api/report 응답.
+ */
+function showReport(d) {
+  reportText = d.markdown;
+  const box = el("div");
+  renderMarkdown(box, d.markdown);
+  $("rbody").replaceChildren(box);
+  $("rdown").hidden = false;
+  $("rgo").textContent = "다시 만들기";
+  const when = new Date(d.generated_at).toLocaleString("ko-KR",
+    { dateStyle: "short", timeStyle: "short" });
+  $("rnote").textContent = when + "에 만든 리포트 · " + d.path;
+}
+
+/**
+ * 저장된 리포트를 불러온다. 없으면 만들 수 있다고 알린다. 요금이 없다.
+ */
+async function loadReport() {
+  if (!currentRepo || reportBusy) return;
+  const my = ++reportSeq;
+  $("rnote").textContent = "불러오는 중...";
+
+  try {
+    const d = await body(await fetch("/api/report?path=" + encodeURIComponent(currentRepo)));
+    if (my !== reportSeq) return;
+
+    if (d.markdown === null) {
+      reportText = "";
+      $("rbody").replaceChildren();
+      $("rdown").hidden = true;
+      $("rgo").textContent = "리포트 만들기";
+      $("rnote").textContent =
+        "아직 만든 리포트가 없습니다. 만들면 레포 요약에 LLM(Haiku)을 한 번 부릅니다.";
+      return;
+    }
+    showReport(d);
+  } catch (err) {
+    if (my === reportSeq) $("rnote").textContent = err.message;
+  }
+}
+
+/**
+ * 리포트를 새로 만든다. 레포 요약에 LLM을 한 번 부르므로 버튼을 눌렀을 때만 한다.
+ * 기다리는 동안 버튼을 막아 두 번 눌러 두 번 과금되는 일을 막는다.
+ */
+async function makeReport() {
+  if (!currentRepo) return;
+  const my = ++reportSeq;
+  reportBusy = true;
+  $("rgo").disabled = true;
+  $("rnote").textContent = "리포트를 만드는 중... 레포 요약에 LLM을 한 번 부릅니다.";
+
+  try {
+    const d = await body(await fetch(
+      "/api/report?path=" + encodeURIComponent(currentRepo), { method: "POST" }));
+    if (my !== reportSeq) return;
+
+    showReport(d);
+    if (!d.saved) {
+      $("rnote").textContent += " · 파일로 저장하지 못했습니다. 내려받아 보관하세요.";
+    }
+  } catch (err) {
+    if (my === reportSeq) $("rnote").textContent = err.message;
+  } finally {
+    if (my === reportSeq) {
+      reportBusy = false;
+      $("rgo").disabled = false;
+    }
+  }
+}
+
+/**
+ * 보고 있는 리포트를 .md 파일로 내려받는다.
+ */
+function downloadReport() {
+  if (!reportText) return;
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([reportText], { type: "text/markdown" }));
+  link.download = "WHYD_REPORT.md";
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+$("rgo").addEventListener("click", makeReport);
+$("rdown").addEventListener("click", downloadReport);
 
 async function loadHistory() {
   if (!currentRepo) return;

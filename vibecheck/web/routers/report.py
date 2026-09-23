@@ -9,6 +9,7 @@
 import logging
 import sqlite3
 from dataclasses import asdict
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -17,10 +18,11 @@ from vibecheck.core.collector import collect_files
 from vibecheck.core.languages import LANGUAGES
 from vibecheck.core.overview import build_overview
 from vibecheck.core.quirks import find_quirks, group_quirks
-from vibecheck.llm.anthropic import ANSWER_MODEL, AnthropicClient
+from vibecheck.llm.anthropic import ANSWER_MODEL, SUMMARY_MODEL, AnthropicClient
 from vibecheck.services.interview import STAGE_ORDER, build_questions
 from vibecheck.services.practice import grade
 from vibecheck.services.relations import file_relations
+from vibecheck.services.report import build_report, report_path
 from vibecheck.store.records import connect, get_repo_id, save_answer
 from vibecheck.store.vector import VectorStore
 from vibecheck.web.deps import Index, RepoPath
@@ -296,3 +298,74 @@ def post_practice(repo: RepoPath, index: Index, req: PracticeRequest) -> dict:
         logger.exception("채점 기록을 저장하지 못했습니다: %s", repo)
 
     return data
+
+
+@router.get("/report")
+def get_report(repo: RepoPath) -> dict:
+    """저장된 리포트를 돌려준다. LLM을 부르지 않는다.
+
+    리포트 탭을 열 때마다 부른다. 만들지는 않는다. 만드는 일은 요금이 나가므로
+    사용자가 버튼을 눌러야만 나가는 POST에 둔다.
+
+    인덱스를 열지 않는다. 파일만 읽으므로, 인덱스가 낡거나 없어도 전에 만든
+    리포트는 볼 수 있다.
+
+    Args:
+        repo: 정규화된 레포 경로.
+
+    Returns:
+        dict: `markdown`(리포트 원문, 없으면 None), `path`(파일 경로),
+            `generated_at`(파일을 쓴 시각, 없으면 None).
+    """
+    path = report_path(repo)
+    if not path.is_file():
+        return {"markdown": None, "path": str(path), "generated_at": None}
+
+    written = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    return {
+        "markdown": path.read_text(encoding="utf-8"),
+        "path": str(path),
+        "generated_at": written.isoformat(),
+    }
+
+
+@router.post("/report")
+def post_report(repo: RepoPath, index: Index) -> dict:
+    """리포트를 새로 만들어 파일에 저장하고 돌려준다. LLM을 부른다.
+
+    whyd report와 같은 재료(개요, 특이 지점)로 같은 함수(build_report)를 불러,
+    CLI와 웹의 리포트가 같은 모양이 되게 한다. 저장도 같은 파일에 한다.
+
+    레포 요약 한 번에 요약 모델을 부른다. CLI와 같은 모델이다.
+
+    저장이 실패해도 만든 리포트는 보낸다. 요금은 이미 나갔다. `saved`를 거짓으로
+    실어 화면이 내려받아 보관하라고 알리게 한다. 채점, 질문 저장과 같은 방식이다.
+
+    Args:
+        repo: 정규화된 레포 경로.
+        index: `open_index()`의 반환값.
+
+    Returns:
+        dict: `markdown`, `path`, `generated_at`, `saved`(파일에 저장했는지).
+    """
+    chunks, _chroma_dir, _stale, meta = index
+
+    excludes = set(meta.get("exclude_dirs") or ()) or None
+    overview = build_overview(str(repo), chunks, excludes)
+    quirk_groups = group_quirks(find_quirks(str(repo), collect_files(str(repo), excludes)))
+    text = build_report(overview, chunks, AnthropicClient(model=SUMMARY_MODEL), quirk_groups)
+
+    path = report_path(repo)
+    saved = False
+    try:
+        path.write_text(text, encoding="utf-8")
+        saved = True
+    except OSError:
+        logger.exception("리포트를 저장하지 못했습니다: %s", path)
+
+    return {
+        "markdown": text,
+        "path": str(path),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "saved": saved,
+    }
