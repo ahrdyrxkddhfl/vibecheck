@@ -284,8 +284,10 @@ def ask(
     if sources:
         try:
             conn = connect(repo)
-            save_ask(conn, get_repo_id(conn, repo), question, text, source_refs(sources))
-            conn.close()
+            try:
+                save_ask(conn, get_repo_id(conn, repo), question, text, source_refs(sources))
+            finally:
+                conn.close()
         except sqlite3.Error as exc:
             typer.secho(f"기록에 남기지 못했습니다: {exc}", fg=typer.colors.YELLOW)
 
@@ -476,10 +478,16 @@ def practice(
 
     print_feedback(fb)
 
-    # 화면에 뿌린 뒤 저장한다. 저장이 실패해도 사용자는 피드백을 이미 받았다.
-    conn = connect(repo)
-    save_answer(conn, get_repo_id(conn, repo), fb, question_id)
-    conn.close()
+    # 화면에 뿌린 뒤 저장한다. 저장이 실패해도 사용자는 피드백을 이미 받았고,
+    # 요금도 이미 나갔다. 실패는 알리되 오류로 끝내지 않는다. whyd ask와 같다.
+    try:
+        conn = connect(repo)
+        try:
+            save_answer(conn, get_repo_id(conn, repo), fb, question_id)
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        typer.secho(f"기록에 남기지 못했습니다: {exc}", fg=typer.colors.YELLOW)
 
 
 @app.command()

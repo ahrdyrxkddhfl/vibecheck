@@ -6,6 +6,8 @@
 명시적으로 누르는 POST에만 둔다.
 """
 
+import logging
+import sqlite3
 from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException
@@ -32,6 +34,7 @@ CLI와 같은 값이어야 두 경로의 채점 결과가 비교 가능하다.
 
 router = APIRouter()
 
+logger = logging.getLogger(__name__)
 
 
 class PracticeRequest(BaseModel):
@@ -237,8 +240,11 @@ def post_practice(repo: RepoPath, index: Index, req: PracticeRequest) -> dict:
     id가 매번 바뀐다. 화면을 새로고침했을 뿐인데 과거 기록의 참조가
     끊기는 것보다, 연결을 포기하고 문장만 남기는 편이 안전하다.
 
-    화면에 뿌릴 것을 먼저 만들고 저장은 그 뒤에 한다. 저장이 실패해도
-    사용자는 이미 채점 결과를 받은 상태여야 한다.
+    저장이 실패해도 채점 결과는 보낸다. 응답은 이 함수가 끝나야 나가므로,
+    저장에서 난 예외를 그대로 두면 이미 요금을 낸 채점까지 500으로 버려진다.
+    예전에는 "화면에 뿌릴 것을 먼저 만들고 저장은 그 뒤에" 두는 것으로 이것을
+    지킨다고 적었지만, 순서만으로는 응답이 나가지 않는다. 대신 `saved`를 거짓으로
+    실어 화면이 기록에 남지 않았다고 밝히게 한다. 질문 저장(ask.post_ask)과 같다.
 
     Args:
         repo: 정규화된 레포 경로.
@@ -246,7 +252,8 @@ def post_practice(repo: RepoPath, index: Index, req: PracticeRequest) -> dict:
         req: 질문과 답변.
 
     Returns:
-        dict: 점수 세 축과 합계, 주장별 판정, 총평, 채점 근거.
+        dict: 점수 세 축과 합계, 주장별 판정, 총평, 채점 근거,
+            `saved`(기록에 남았는지).
     """
     chunks, chroma_dir, _stale, _meta = index
 
@@ -284,8 +291,15 @@ def post_practice(repo: RepoPath, index: Index, req: PracticeRequest) -> dict:
         "evidence_chunks": feedback.evidence_chunks,
     }
 
-    conn = connect(repo)
-    save_answer(conn, get_repo_id(conn, repo), feedback)
-    conn.close()
+    data["saved"] = False
+    try:
+        conn = connect(repo)
+        try:
+            save_answer(conn, get_repo_id(conn, repo), feedback)
+            data["saved"] = True
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        logger.exception("채점 기록을 저장하지 못했습니다: %s", repo)
 
     return data

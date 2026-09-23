@@ -860,7 +860,10 @@ function answerBox(q, repo) {
 
       renderScore(result, data);
       result.hidden = false;
-      note.textContent = "";
+      // 채점은 받았는데 기록에 못 남긴 경우만 알린다. 기록 탭에 안 보이는 이유가 된다.
+      note.textContent = data.saved === false
+        ? "채점은 받았지만 기록에 남기지 못했습니다."
+        : "";
     } catch (err) {
       note.textContent = err.message;
     } finally {
