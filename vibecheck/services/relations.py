@@ -174,8 +174,6 @@ def file_relations(
                 "types"는 타입 참조, None은 잇지 않았다는 뜻이다. None이면
                 called_by와 calls가 비어 있는 것은 연결이 없어서가 아니라 재지
                 않아서다. 화면이 셋을 구분해 말할 수 있게 싣는다.
-            calls_analyzed (bool): relation이 "calls"인지. 앞선 화면 코드와의
-                호환을 위해 남긴다.
             language (str): 이 파일의 언어 표시 이름.
     """
     l2 = [c for c in chunks if c.kind in L2_KINDS]
@@ -229,6 +227,5 @@ def file_relations(
         "calls": neighbor_files(calls),
         "symbols": symbols,
         "relation": relation,
-        "calls_analyzed": relation == "calls",
         "language": spec.label if spec else "",
     }
