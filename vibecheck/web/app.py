@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from vibecheck.web.errors import register_error_handlers
 from vibecheck.web.routers import ask, history, report
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -29,6 +30,10 @@ app = FastAPI(
 
 app.include_router(report.router, prefix="/api", tags=["report"])
 app.include_router(ask.router, prefix="/api", tags=["ask"])
+
+# 사용 한도, 키 오류, 서버를 켠 채 다시 인덱싱한 경우처럼 원인을 아는 실패는
+# 500 대신 사용자가 할 일을 담은 안내로 돌려준다.
+register_error_handlers(app)
 app.include_router(history.router, prefix="/api", tags=["history"])
 
 @app.middleware("http")

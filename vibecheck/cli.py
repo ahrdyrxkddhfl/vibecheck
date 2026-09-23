@@ -28,6 +28,7 @@ from vibecheck.core.collector import collect_files
 from vibecheck.core.overview import build_overview
 from vibecheck.core.quirks import find_quirks, group_quirks
 from vibecheck.llm.anthropic import AnthropicClient
+from vibecheck.llm.errors import LLM_ERRORS, describe_llm_error
 from vibecheck.services.index_access import (
     IndexEmpty,
     IndexNotFound,
@@ -632,8 +633,26 @@ def serve(
 
 
 def main() -> None:
-    """콘솔 스크립트 진입점."""
-    app()
+    """콘솔 스크립트 진입점.
+
+    LLM 호출이 실패하면 트레이스백 대신 사용자가 할 일을 한 줄로 알리고 끝낸다.
+    사용 한도, 키 오류, 네트워크 문제는 할 일이 서로 다른데, 트레이스백 맨 아래
+    줄만으로는 그 구분이 잘 보이지 않는다. 명령마다 잡지 않고 여기서 한 번에
+    잡아, index, ask, practice, report가 모두 같은 안내를 쓴다.
+
+    안내로 바꿀 수 없는 예외는 그대로 올린다.
+
+    Raises:
+        SystemExit: LLM 호출이 실패하면 1로 끝낸다.
+    """
+    try:
+        app()
+    except LLM_ERRORS as exc:
+        message = describe_llm_error(exc)
+        if message is None:
+            raise
+        typer.secho(message, fg=typer.colors.RED, err=True)
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

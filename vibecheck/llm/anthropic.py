@@ -6,6 +6,7 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 from vibecheck.llm.base import LLMClient
+from vibecheck.llm.errors import MissingAPIKey
 
 load_dotenv()
 
@@ -23,12 +24,12 @@ class AnthropicClient(LLMClient):
         Args:
             model (str) : 모델 식별자.
         Raises:
-            ValueError: 환경변수에 API 키가 없을 때.
+            MissingAPIKey: 환경변수에 API 키가 없을 때. ValueError의 하위다.
         """
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            raise ValueError(
-                "ANTHROPIC_API_KEY가 설정되지 않았습니다."
+            raise MissingAPIKey(
+                "ANTHROPIC_API_KEY가 설정되지 않았습니다. "
                 ".env 파일을 확인하세요."
             )
 
