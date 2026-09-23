@@ -1,8 +1,23 @@
 [project]
-name = "vibecheck"
+name = "vibecheck-whyd"
 version = "0.1.0"
-description = "AI로 짠 코드, 설명할 수 있게"
+description = "AI로 짠 코드, 설명할 수 있게 — 내 레포로 면접 예상질문을 받고, 내 답을 코드 근거로 채점한다"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
+keywords = ["code-understanding", "interview-practice", "rag", "tree-sitter", "llm", "claude"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Natural Language :: Korean",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development",
+]
 dependencies = [
     "tree-sitter",
     "tree-sitter-python",
@@ -11,7 +26,9 @@ dependencies = [
     "python-dotenv",
     "typer",
     "rich",
-    "chromadb",
+    # 서버를 켠 채 다시 인덱싱해도 새 인덱스를 보게 하는 동작(store.vector.get_client)을
+    # 1.5.9에서 확인했다. 연결을 close()로 내리고 새로 여는 방식에 기댄다.
+    "chromadb>=1.5",
     "sentence-transformers",
     "fastapi",
     "uvicorn",
@@ -23,8 +40,15 @@ dev = ["pytest"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[project.urls]
+Repository = "https://github.com/ahrdyrxkddhfl/vibecheck"
+Issues = "https://github.com/ahrdyrxkddhfl/vibecheck/issues"
+
+# whyd가 명령 이름이다. PyPI의 whyd라는 이름은 다른 도구가 쓰고 있어, 배포 이름과
+# 같은 별칭을 하나 더 둔다. uvx vibecheck-whyd처럼 설치 없이 바로 실행할 수 있다.
 [project.scripts]
 whyd = "vibecheck.cli:main"
+vibecheck-whyd = "vibecheck.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["vibecheck*"]
@@ -37,5 +61,6 @@ include = ["vibecheck*"]
 "vibecheck.web" = ["static/*.html"]
 
 [build-system]
-requires = ["setuptools>=68"]
+# license = "MIT"처럼 라이선스를 이름(SPDX)으로 적는 방식은 setuptools 77부터 받는다.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"

@@ -8,7 +8,7 @@ AI로 짠 코드, 돌아가긴 하는데 설명은 못 하겠을 때.
 내 답변이 면접에서 통할지 채점해주는 도구입니다. CLI와 웹 화면 둘 다 씁니다.
 파이썬과 Java 레포를 읽고, 독스트링도 주석도 없는 레포를 주 대상으로 합니다.
 
-<img src="docs/images/grading.png" width="720" alt="채점 화면: 답변을 주장 단위로 나눠 근거와 대조하고, 근거 없이 단정한 지점을 짚는다">
+<img src="https://raw.githubusercontent.com/ahrdyrxkddhfl/vibecheck/main/docs/images/grading.png" width="720" alt="채점 화면: 답변을 주장 단위로 나눠 근거와 대조하고, 근거 없이 단정한 지점을 짚는다">
 
 ```
 $ whyd ask . "채점은 어디서 처리돼?"
@@ -184,7 +184,7 @@ whyd history ./my-repo
 whyd serve ./my-repo
 ```
 
-<img src="docs/images/overview.png" width="720" alt="개요 화면: 규모, 분석하지 못한 파일, 외부 의존성, 진입점, 모듈 지도">
+<img src="https://raw.githubusercontent.com/ahrdyrxkddhfl/vibecheck/main/docs/images/overview.png" width="720" alt="개요 화면: 규모, 분석하지 못한 파일, 외부 의존성, 진입점, 모듈 지도">
 
 개요, 질문, 면접 질문, 관계도, 기록 다섯 탭으로 보여줍니다.
 질문 탭에서 레포에 묻고, 면접 질문 탭에서 답을 쓰고 채점받고,
@@ -197,7 +197,7 @@ whyd serve ./my-repo
 직전 질문을 붙여 검색하고, 앞선 대화는 무엇을 가리키는지 알아내는 데만 씁니다. 사실의 근거는 여전히
 그 질문에서 찾은 코드뿐이라, 앞 답을 근거로 이어받지 않습니다. 다른 주제로 넘어갈 때는 '새 질문'을 누릅니다.
 
-<img src="docs/images/ask.png" width="720" alt="질문 탭: 레포에 물은 질문, 코드를 근거로 쓴 답, 답이 짚은 파일과 줄 목록">
+<img src="https://raw.githubusercontent.com/ahrdyrxkddhfl/vibecheck/main/docs/images/ask.png" width="720" alt="질문 탭: 레포에 물은 질문, 코드를 근거로 쓴 답, 답이 짚은 파일과 줄 목록">
 
 레포 경로를 생략하면 빈 화면에서 경로를 입력해 시작합니다.
 서버를 켠 채로 다른 터미널에서 다시 인덱싱해도 다음 질문부터 새 인덱스로 답합니다.
@@ -212,7 +212,7 @@ Java 파일은 호출 대신 코드에 나온 클래스 이름으로 잇습니�
 메서드 단위 호출은 분석하지 않아 아래 함수 목록에는 부르는 것과 불리는 곳이 붙지 않습니다.
 다른 패키지에 같은 이름의 클래스가 있으면 어느 쪽인지 짐작하지 않고 잇지 않습니다.
 
-<img src="docs/images/relations.png" width="720" alt="관계도: 가운데 파일을 부르는 파일과 그 파일이 부르는 파일을 잇고, 아래에 함수별 호출 관계를 적는다">
+<img src="https://raw.githubusercontent.com/ahrdyrxkddhfl/vibecheck/main/docs/images/relations.png" width="720" alt="관계도: 가운데 파일을 부르는 파일과 그 파일이 부르는 파일을 잇고, 아래에 함수별 호출 관계를 적는다">
 
 | 옵션 | 용도 |
 |---|---|
