@@ -37,7 +37,7 @@ def api(tmp_path, monkeypatch):
     """
     asked: list[str] = []
 
-    def fake_answer(question, chunks, store, llm, top_k=8):
+    def fake_answer(question, chunks, store, llm, top_k=8, history=None):
         """받은 질문을 적어두고 정해진 답을 돌려준다."""
         asked.append(question)
         source = SimpleNamespace(
@@ -82,6 +82,8 @@ def test_ask_returns_answer_sources_and_stale_count(api):
         ],
         "stale_count": 2,
         "saved": True,
+        "id": 1,
+        "parent_id": None,
     }
     assert asked == ["채점은 어디서?"]
 

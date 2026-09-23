@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS asks (
     question    TEXT NOT NULL,
     answer      TEXT NOT NULL,
     sources     TEXT NOT NULL,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    parent_id   INTEGER REFERENCES asks(id)
 );
 
 CREATE TABLE IF NOT EXISTS typing_runs (
@@ -123,7 +124,35 @@ def connect(repo: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    upgrade(conn)
     return conn
+
+
+def upgrade(conn: sqlite3.Connection) -> None:
+    """이전 버전이 만든 기록 파일에 새로 생긴 칸을 더한다.
+
+    CREATE TABLE IF NOT EXISTS는 테이블이 이미 있으면 아무것도 하지 않아, 칸을
+    더한 스키마로 바꿔도 이미 쌓인 records.db에는 반영되지 않는다. 그래서 열 때마다
+    빠진 칸을 확인하고 더한다. 지우거나 옮기지 않고 더하기만 하므로 기존 기록은
+    그대로 남는다.
+
+    asks.parent_id: 이어지는 질문이 어느 질문에 이어졌는지. 질문 이어가기를 붙이며
+    더했다. 기존 질문은 이 칸이 비어 첫 질문으로 읽힌다.
+
+    같은 파일을 두 연결이 거의 동시에 처음 열면 둘 다 칸이 없다고 보고 더하려 한다.
+    뒤에 온 쪽은 "이미 있다"로 실패하는데, 원하는 상태는 이미 된 것이라 넘어간다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(asks)")}
+    if "parent_id" not in columns:
+        try:
+            conn.execute("ALTER TABLE asks ADD COLUMN parent_id INTEGER REFERENCES asks(id)")
+            conn.commit()
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc):
+                raise
 
 
 def get_repo_id(conn: sqlite3.Connection, repo: Path) -> int:
@@ -384,6 +413,7 @@ def save_ask(
     question: str,
     answer: str,
     sources: list[dict],
+    parent_id: int | None = None,
 ) -> int:
     """질문과 그때 받은 답, 근거를 저장한다.
 
@@ -402,14 +432,22 @@ def save_ask(
         question (str): 사용자 질문.
         answer (str): 받은 답(마크다운).
         sources (list[dict]): 근거 목록. services.qa.source_refs의 결과.
+        parent_id (int | None): 이 질문이 이어진 앞 질문의 id. 첫 질문이면 None.
 
     Returns:
         int: 저장된 asks 행의 id.
     """
     cur = conn.execute(
-        "INSERT INTO asks (repo_id, question, answer, sources, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (repo_id, question, answer, json.dumps(sources, ensure_ascii=False), now()),
+        "INSERT INTO asks (repo_id, question, answer, sources, created_at, parent_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            repo_id,
+            question,
+            answer,
+            json.dumps(sources, ensure_ascii=False),
+            now(),
+            parent_id,
+        ),
     )
     conn.commit()
     return cur.lastrowid
@@ -423,13 +461,54 @@ def list_asks(conn: sqlite3.Connection, repo_id: int, limit: int = 20) -> list:
         repo_id (int): 대상 레포 id.
         limit (int): 가져올 최대 개수.
 
+    이어진 질문에는 앞 질문의 문장(parent_question)을 붙인다. 목록은 최근 몇 건만
+    꺼내므로 앞 질문이 목록에서 잘렸을 수 있는데, 화면은 그래도 무엇에 이어진
+    질문인지 보여줘야 한다.
+
     Returns:
         list: asks 행 목록. 최신순. sources는 JSON 문자열 그대로다.
     """
     return conn.execute(
-        "SELECT * FROM asks WHERE repo_id = ? ORDER BY created_at DESC LIMIT ?",
+        "SELECT a.*, p.question AS parent_question "
+        "FROM asks a LEFT JOIN asks p ON p.id = a.parent_id "
+        "WHERE a.repo_id = ? ORDER BY a.created_at DESC LIMIT ?",
         (repo_id, limit),
     ).fetchall()
+
+
+def get_ask_chain(
+    conn: sqlite3.Connection, repo_id: int, ask_id: int, limit: int
+) -> list:
+    """질문 하나에서 앞 질문을 거슬러 올라가 대화를 꺼낸다.
+
+    이어지는 질문에 붙일 앞 대화다. 화면이 보낸 대화 내용을 믿지 않고 기록에서
+    꺼내, 화면에 보인 대화와 모델이 받은 대화가 어긋나지 않게 한다.
+
+    limit까지만 거슬러 올라간다. 오래된 턴은 답변에 붙이지 않으므로 더 읽을
+    필요가 없고, 기록이 어떤 식으로 꼬여 있어도 반복이 끝나게 한다.
+
+    Args:
+        conn (sqlite3.Connection): 열린 연결.
+        repo_id (int): 대상 레포 id.
+        ask_id (int): 거슬러 올라가기 시작할 질문의 id. 대화의 마지막 턴이다.
+        limit (int): 꺼낼 최대 턴 수.
+
+    Returns:
+        list: asks 행 목록. 오래된 것부터. 그 id가 없으면 빈 목록.
+    """
+    chain = []
+    current = ask_id
+    while current is not None and len(chain) < limit:
+        row = conn.execute(
+            "SELECT * FROM asks WHERE id = ? AND repo_id = ?", (current, repo_id)
+        ).fetchone()
+        if row is None:
+            break
+        chain.append(row)
+        current = row["parent_id"]
+
+    chain.reverse()
+    return chain
 
 
 def count_asks(conn: sqlite3.Connection, repo_id: int) -> int:

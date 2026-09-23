@@ -544,6 +544,43 @@ def rerank(
 
     return found
 
+HISTORY_TURNS = 4
+"""이어지는 질문에 앞선 대화로 붙일 최대 턴 수.
+
+직전 턴만 답까지 싣고 그 앞은 질문만 싣는다(format_history). 질문만 싣는 턴이
+너무 많으면 이번 질문과 상관없는 옛 주제가 섞이므로 몇 턴으로 끊는다.
+"""
+
+
+def format_history(history: list[dict]) -> str:
+    """앞선 대화를 답변 프롬프트에 붙일 모양으로 적는다.
+
+    직전 턴은 질문과 답을 모두 싣고, 그 앞 턴은 질문만 싣는다. "그건", "거기서"가
+    가리키는 대상은 대개 직전 답 안에 있다. 답은 최대 2000토큰이라 모든 턴의 답을
+    실으면 턴이 쌓일수록 요금이 불어난다.
+
+    머리말에 앞선 대화의 쓰임을 적는다. 프롬프트 규칙과 같은 말을 대화 바로 위에
+    한 번 더 두어, 앞 답을 사실의 근거로 이어받지 않게 한다.
+
+    Args:
+        history (list[dict]): 앞선 턴들. 오래된 것부터. 각 턴은 question과 answer를 갖는다.
+
+    Returns:
+        str: 프롬프트에 붙일 글.
+    """
+    turns = history[-HISTORY_TURNS:]
+    lines = [
+        "앞선 대화 (이번 질문이 가리키는 대상을 알아내는 데만 쓰고, 사실의 근거로 쓰지 않습니다):",
+        "",
+    ]
+    for turn in turns[:-1]:
+        lines.append(f"이전 질문: {turn['question']}")
+
+    last = turns[-1]
+    lines += [f"직전 질문: {last['question']}", "직전 답변:", last["answer"]]
+    return "\n".join(lines)
+
+
 def source_refs(chunks: list[Chunk]) -> list[dict]:
     """근거 청크를 화면에 보내고 기록에 남길 모양으로 줄인다.
 
@@ -576,6 +613,7 @@ def answer(
     store: VectorStore,
     llm: LLMClient,
     top_k: int = 8,
+    history: list[dict] | None = None,
 ) -> tuple[str, list[Chunk]]:
     """질문에 대한 답변과 근거 청크를 반환한다.
 
@@ -593,16 +631,29 @@ def answer(
             실험 A3에서 5에서 8로 늘렸을 때 답변 점수가 21에서 23으로 올랐다.
             정답이 큰 함수 안에 있어 상위 5개에 들지 못하던 경우가 해소됐다.
             ctxd 규모(67청크)에서 관찰된 값이므로 일반적 최적값은 아니다.
+        history (list[dict] | None): 이어지는 질문이면 앞선 턴들. 오래된 것부터.
+            각 턴은 question과 answer를 갖는다.
+
+            검색, 재정렬, 호출 대조에는 직전 질문을 이번 질문 앞에 붙여 쓴다.
+            "그거 지우는 기능도 있어?"만으로 검색하면 정답 파일이 13등이었고,
+            직전 질문을 붙이니 1등이었다. 나머지 세 짝에서도 붙여서 나빠진 곳은
+            없었다(2026-09-23, 네 짝, probe_followup_search.py).
+
+            답변 프롬프트에는 앞선 대화를 따로 붙인다(format_history). 사실의
+            근거는 여전히 이번에 찾은 코드뿐이다.
 
     Returns:
         tuple[str, list[Chunk]]: 답변 텍스트와 근거로 사용된 청크 목록.
             근거를 함께 반환하는 이유는 사용자가 답변의 출처를 직접 확인할 수 있어야 하기 때문이다.
             LLM답변은 검증 가능해야 한다.
     """
-    candidates = search_by_kind(question, chunks, store, top_k * CANDIDATE_MULTIPLIER)
+    history = history or []
+    query = f"{history[-1]['question']} {question}" if history else question
+
+    candidates = search_by_kind(query, chunks, store, top_k * CANDIDATE_MULTIPLIER)
     # 겹치는 청크를 뺀 뒤 자르므로, 재정렬에게는 몇 개 더 고르게 한다.
     # 그래도 모자라면 나머지 후보로 채운다(pick_distinct).
-    picked = rerank(question, candidates, llm, top_k + RERANK_SPARE)
+    picked = rerank(query, candidates, llm, top_k + RERANK_SPARE)
     found = pick_distinct(picked, candidates, top_k)
 
     if not found:
@@ -612,9 +663,12 @@ def answer(
 
     # 대조 결과를 코드 앞에 둔다. 뒤에 두면 긴 코드 블록에 묻히고,
     # 이 질문에서 가장 확실한 사실이 가장 늦게 읽힌다.
-    parts = [f"질문: {question}", ""]
+    parts = []
+    if history:
+        parts += [format_history(history), ""]
+    parts += [f"질문: {question}", ""]
 
-    callers = format_callers(find_callers(question, chunks))
+    callers = format_callers(find_callers(query, chunks))
     if callers:
         parts += [callers, ""]
 

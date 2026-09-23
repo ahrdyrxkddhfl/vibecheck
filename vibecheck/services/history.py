@@ -186,6 +186,8 @@ def load_history(repo: Path, limit: int = 20) -> dict:
                 "question": r["question"],
                 "answer": r["answer"],
                 "sources": json.loads(r["sources"]),
+                "parent_id": r["parent_id"],
+                "parent_question": r["parent_question"],
             }
             for r in ask_rows
         ],
