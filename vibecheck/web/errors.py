@@ -22,17 +22,18 @@ from vibecheck.llm.errors import LLM_ERRORS, MissingAPIKey, describe_llm_error
 logger = logging.getLogger(__name__)
 
 STALE_STORE_MESSAGE = (
-    "벡터 저장소를 읽지 못했습니다. 서버를 켠 채로 다시 인덱싱했다면 "
-    "whyd serve를 다시 띄우세요."
+    "벡터 저장소를 읽지 못했습니다. 인덱싱이 진행 중이었다면 끝난 뒤 다시 시도하세요. "
+    "계속되면 whyd serve를 다시 띄우세요."
 )
 """벡터 저장소 내부 오류에 붙이는 안내.
 
-서버는 저장소 연결을 한 번 열어 계속 쓰는데(store.vector.get_client), 다른
-프로세스가 whyd index로 청크를 지우고 다시 넣으면 서버의 연결은 없는 id를 찾다가
-"Error finding id"로 실패한다. 2026-09-23에 그렇게 재현됐다.
+서버를 켠 채 다른 프로세스가 whyd index로 다시 인덱싱하면, 서버가 들고 있던
+연결은 없는 id를 찾다가 "Error finding id"로 실패했다(2026-09-23). 지금은
+store.vector.get_client가 저장소 파일의 수정 시각으로 이를 알아채고 새로 연다.
 
-같은 예외가 다른 원인으로도 날 수 있어 원인을 단정하지 않고, 가장 흔한 경우의
-해결책을 조건과 함께 적는다.
+남는 경우는 인덱싱과 요청이 정확히 겹쳐, 새로 여는 순간 옛 연결로 진행 중이던
+요청이 실패하는 것이다. 다시 시도하면 새 연결로 풀린다. 같은 예외가 다른 원인으로도
+날 수 있어 원인을 단정하지 않고, 조건과 함께 할 일을 차례로 적는다.
 """
 
 
@@ -57,7 +58,7 @@ async def llm_error_handler(request: Request, exc: Exception) -> JSONResponse:
 
 
 async def store_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    """벡터 저장소 내부 오류를 다시 띄우라는 안내로 바꿔 응답한다.
+    """벡터 저장소 내부 오류를 다시 시도하라는 안내로 바꿔 응답한다.
 
     원인을 단정하지 않으므로 트레이스백은 서버 로그에 그대로 남긴다. 안내대로 해도
     안 되면 그 로그가 다음 단서다.

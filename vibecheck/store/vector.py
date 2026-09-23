@@ -15,15 +15,34 @@ from chromadb.utils import embedding_functions
 from vibecheck.models import Chunk
 
 COLLECTION_NAME = "chunks"
-_CLIENTS: dict[str, "chromadb.ClientAPI"] = {}
-"""경로별로 하나씩 두는 Chroma 클라이언트."""
+
+SQLITE_FILE = "chroma.sqlite3"
+"""Chroma가 저장소 디렉터리에 두는 SQLite 파일. 수정 시각으로 바깥의 쓰기를 알아챈다."""
+
+_CLIENTS: dict[str, tuple[int | None, "chromadb.ClientAPI"]] = {}
+"""경로별로 하나씩 두는 Chroma 클라이언트와, 그 클라이언트가 본 저장소의 수정 시각."""
 
 _CLIENTS_LOCK = threading.Lock()
 """클라이언트를 만들 때 채우는 자물쇠."""
 
 
+def store_stamp(persist_dir: str) -> int | None:
+    """저장소 SQLite 파일의 수정 시각을 읽는다.
+
+    Args:
+        persist_dir (str): 벡터 저장소 디렉터리.
+
+    Returns:
+        int | None: 나노초 단위 수정 시각. 파일이 아직 없으면 None.
+    """
+    try:
+        return (Path(persist_dir) / SQLITE_FILE).stat().st_mtime_ns
+    except OSError:
+        return None
+
+
 def get_client(persist_dir: str) -> "chromadb.ClientAPI":
-    """경로에 해당하는 Chroma 클라이언트를 돌려준다. 없으면 만든다.
+    """경로에 해당하는 Chroma 클라이언트를 돌려준다. 없거나 낡았으면 새로 연다.
 
     PersistentClient를 매번 새로 만들면 안 된다. Chroma는 경로를 키로
     시스템을 공유하는 클래스 단위 등록부를 들고 있는데 스레드 안전하지
@@ -34,6 +53,25 @@ def get_client(persist_dir: str) -> "chromadb.ClientAPI":
     KeyError, 다른 쪽은 bindings 속성이 사라졌다는 오류였다.
     스레드 둘로 open_index를 동시에 부르면 그대로 재현된다.
 
+    그렇다고 한 번 연 것을 계속 쓰면, 서버를 켠 채 다른 프로세스가 whyd index로
+    다시 인덱싱했을 때 서버의 클라이언트는 그 변화를 모른다. 이미 지워진 청크를
+    돌려주거나 "Error finding id"로 실패했다. 같은 경로로 PersistentClient를 새로
+    만들어도 등록부가 같은 시스템을 돌려줘 소용없다(chromadb 1.5.9에서 확인,
+    vibecheck-tools/probe_chroma_reload.py).
+
+    그래서 연 직후 SQLite 파일의 수정 시각을 함께 기억하고, 꺼낼 때마다 비교한다.
+    달라졌으면 옛 클라이언트를 close()해 등록부에서 시스템을 내린 뒤 새로 연다.
+    다른 경로의 클라이언트는 건드리지 않는다. 등록부를 통째로 비우는 방법
+    (clear_system_cache)은 옛 시스템을 멈추지 않고 남겨, 나중에 같은 이름으로
+    닫을 때 새 시스템을 멈출 수 있어 택하지 않았다.
+
+    수정 시각은 연 뒤에 읽는다. 한 프로세스가 저장소를 처음 열 때 SQLite에 한 번
+    쓰기 때문이다. 그 뒤의 읽기(검색, 개수 세기)로는 바뀌지 않는다.
+
+    새로 열 때, 같은 경로의 옛 클라이언트로 진행 중이던 요청은 실패할 수 있다.
+    다시 인덱싱과 질문이 정확히 겹칠 때뿐이고, 웹은 그 실패를 다시 시도하라는
+    안내로 바꾼다(web.errors).
+
     만드는 구간만 자물쇠로 막는다. 이미 있는 것을 꺼내 쓰는 것은
     막을 필요가 없고, 막으면 검색이 줄을 서게 된다.
 
@@ -41,18 +79,41 @@ def get_client(persist_dir: str) -> "chromadb.ClientAPI":
         persist_dir (str): 벡터 저장소 디렉토리.
 
     Returns:
-        chromadb.ClientAPI: 그 경로의 클라이언트. 같은 경로면 같은 것이다.
+        chromadb.ClientAPI: 그 경로의 클라이언트. 저장소가 바뀌지 않았으면 같은 것이다.
     """
-    client = _CLIENTS.get(persist_dir)
-    if client is not None:
-        return client
+    cached = _CLIENTS.get(persist_dir)
+    if cached is not None and cached[0] == store_stamp(persist_dir):
+        return cached[1]
 
     with _CLIENTS_LOCK:
-        # 자물쇠를 기다리는 사이 다른 스레드가 만들었을 수 있다.
-        if persist_dir not in _CLIENTS:
-            _CLIENTS[persist_dir] = chromadb.PersistentClient(path=persist_dir)
+        # 자물쇠를 기다리는 사이 다른 스레드가 새로 열었을 수 있다.
+        cached = _CLIENTS.get(persist_dir)
+        if cached is not None and cached[0] == store_stamp(persist_dir):
+            return cached[1]
 
-    return _CLIENTS[persist_dir]
+        if cached is not None:
+            cached[1].close()
+
+        client = chromadb.PersistentClient(path=persist_dir)
+        _CLIENTS[persist_dir] = (store_stamp(persist_dir), client)
+        return client
+
+
+def remember_own_write(persist_dir: str) -> None:
+    """이 프로세스가 저장소에 쓴 뒤, 기억해 둔 수정 시각을 지금 값으로 맞춘다.
+
+    그러지 않으면 자기가 쓴 것을 다른 프로세스가 바꾼 것으로 보고, 다음에 꺼낼 때
+    쓰고 있던 클라이언트를 닫는다. 지금 whyd index는 저장소를 한 번 열어 add와
+    prune을 하므로 그 일이 생기지 않지만, 흐름이 바뀌어도 안전하게 둔다.
+
+    Args:
+        persist_dir (str): 벡터 저장소 디렉터리.
+    """
+    with _CLIENTS_LOCK:
+        cached = _CLIENTS.get(persist_dir)
+        if cached is not None:
+            _CLIENTS[persist_dir] = (store_stamp(persist_dir), cached[1])
+
 
 EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 """임베딩 모델 이름.
@@ -137,6 +198,7 @@ class VectorStore:
     """청크의 벡터 저장과 검색을 담당한다.
 
     Attributes:
+        persist_dir (str): 저장소 디렉터리. 쓴 뒤 수정 시각을 맞출 때 쓴다.
         client: Chroma 클라이언트.
         collection: 청크가 저장되는 컬렉션.
     """
@@ -162,6 +224,7 @@ class VectorStore:
         """
         Path(persist_dir).mkdir(parents=True, exist_ok=True)
         quiet_model_loading(EMBEDDING_MODEL)
+        self.persist_dir = persist_dir
         self.client = get_client(persist_dir)
         self.collection = self.client.get_or_create_collection(
             name=COLLECTION_NAME,
@@ -213,6 +276,7 @@ class VectorStore:
                 for c in chunks
             ],
         )
+        remember_own_write(self.persist_dir)
 
     def prune(self, valid_ids: list[str]) -> int:
         """인덱싱 결과에 없는 청크를 저장소에서 지운다.
@@ -248,6 +312,7 @@ class VectorStore:
 
         if stale:
             self.collection.delete(ids=stale)
+            remember_own_write(self.persist_dir)
 
         return len(stale)
 
