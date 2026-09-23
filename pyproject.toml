@@ -29,6 +29,13 @@ whyd = "vibecheck.cli:main"
 [tool.setuptools.packages.find]
 include = ["vibecheck*"]
 
+# 파이썬 파일이 아닌 것은 따로 적어야 패키지에 들어간다. 적지 않으면 편집 모드
+# (pip install -e .)에서는 레포를 직접 읽어 티가 나지 않다가, pip install .이나
+# PyPI로 설치하면 프롬프트와 웹 화면이 빠져 모든 LLM 호출과 whyd serve가 깨진다.
+[tool.setuptools.package-data]
+"vibecheck.prompts" = ["*.txt"]
+"vibecheck.web" = ["static/*.html"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
