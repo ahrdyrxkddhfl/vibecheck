@@ -1,12 +1,18 @@
 # VibeCheck
 
-> 🚧 개발 중 (WIP)
+[![PyPI](https://img.shields.io/pypi/v/vibecheck-whyd)](https://pypi.org/project/vibecheck-whyd/)
+[![Python](https://img.shields.io/pypi/pyversions/vibecheck-whyd)](https://pypi.org/project/vibecheck-whyd/)
+[![License](https://img.shields.io/pypi/l/vibecheck-whyd)](https://github.com/ahrdyrxkddhfl/vibecheck/blob/main/LICENSE)
 
 AI로 짠 코드, 돌아가긴 하는데 설명은 못 하겠을 때.
 
 **VibeCheck**는 레포를 인덱싱해서 그 코드에 대해 자연어로 묻고, 면접 예상질문을 만들고,
-내 답변이 면접에서 통할지 채점해주는 도구입니다. CLI와 웹 화면 둘 다 씁니다.
+내 답변이 면접에서 통할지 채점해주는 도구입니다. CLI와 웹 화면에서 쓰고,
+Claude 같은 AI 도구에 MCP로 붙여 대화로도 연습할 수 있습니다.
 파이썬과 Java 레포를 읽고, 독스트링도 주석도 없는 레포를 주 대상으로 합니다.
+
+코드를 대신 설명해 주는 도구가 아니라, 내가 설명할 수 있는지 확인하는 도구입니다.
+면접 질문에는 답 대신 답의 재료만 접어 두고, 내 답을 주장 단위로 나눠 코드 근거와 대조합니다.
 
 <img src="https://raw.githubusercontent.com/ahrdyrxkddhfl/vibecheck/main/docs/images/grading.png" width="720" alt="채점 화면: 답변을 주장 단위로 나눠 근거와 대조하고, 근거 없이 단정한 지점을 짚는다">
 
@@ -46,6 +52,28 @@ $ whyd ask . "채점은 어디서 처리돼?"
 
 ## 설치
 
+PyPI에 `vibecheck-whyd`라는 이름으로 올라가 있습니다. 파이썬 3.11 이상이 필요합니다.
+
+```bash
+pip install vibecheck-whyd
+```
+
+명령 이름은 `whyd`입니다. 배포 이름과 같은 `vibecheck-whyd`로도 실행됩니다.
+PyPI의 `vibecheck`와 `whyd`는 다른 사람의 프로젝트입니다. 특히 `vibecheck` 패키지는
+import 이름도 `vibecheck`라서, 한 가상환경에 둘을 함께 설치하면 서로 덮어씁니다.
+
+API 키는 셸 환경변수로 넣거나, `whyd`를 실행하는 폴더의 `.env` 파일에 적습니다.
+둘 다 있으면 셸에서 넣은 값이 앞섭니다. Claude에 MCP로 붙여 쓸 때는 키가 없어도 됩니다.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+# 또는 .env 파일에: ANTHROPIC_API_KEY=sk-ant-...
+```
+
+처음 인덱싱할 때 검색용 임베딩 모델을 한 번 내려받습니다.
+
+### 소스에서 설치 (개발용)
+
 ```bash
 git clone https://github.com/ahrdyrxkddhfl/vibecheck.git
 cd vibecheck
@@ -53,13 +81,7 @@ cd vibecheck
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-```
-
-API 키 설정:
-
-```bash
-cp .env.example .env
-# .env 파일에 ANTHROPIC_API_KEY 입력
+cp .env.example .env   # .env 파일에 ANTHROPIC_API_KEY 입력
 ```
 
 테스트:
@@ -74,9 +96,21 @@ pytest
 ## 빠른 시작
 
 ```bash
+pip install vibecheck-whyd
+export ANTHROPIC_API_KEY=sk-ant-...   # 또는 실행하는 폴더의 .env
+
 whyd index ./my-repo
 whyd serve ./my-repo
 ```
+
+설치 없이 써보려면 [uv](https://docs.astral.sh/uv/)의 `uvx`로 같은 명령을 실행합니다.
+
+```bash
+uvx vibecheck-whyd index ./my-repo
+uvx vibecheck-whyd serve ./my-repo
+```
+
+API 키 없이 Claude에 붙여 대화로 연습하려면 [8. Claude에 연결하기](#8-claude에-연결하기-mcp)를 보세요.
 
 브라우저가 열리면서 그 레포의 개요 화면이 바로 뜹니다.
 
@@ -226,10 +260,61 @@ Java 파일은 호출 대신 코드에 나온 클래스 이름으로 잇습니�
 | `--no-browser` | 브라우저를 자동으로 열지 않기 |
 | `--reload` | 코드 변경 시 자동 재시작 (개발용) |
 
+### 8. Claude에 연결하기 (MCP)
+
+코드를 짜던 AI 도구의 대화 안에서 면접 연습을 합니다. "이 레포로 면접 연습하자"라고 하면
+연결한 AI가 VibeCheck에서 질문을 받아 하나씩 묻고, 답을 코드 근거와 대조해 채점합니다.
+
+채점과 답변은 연결한 AI가 하고, VibeCheck는 면접 질문 세트, 채점 근거, 채점 기준, 기록을
+맡습니다. 그래서 **API 키 없이도 끝까지 쓸 수 있습니다.** 키가 없으면 요약 없이 인덱싱합니다.
+
+```bash
+whyd index ./my-repo --no-summary   # 키가 있으면 --no-summary를 빼면 검색이 더 좋아집니다
+```
+
+요약이 빠지면 "채점은 어디서 처리돼?" 같은 자연어 질문의 검색이 약해집니다. 함수나 클래스
+이름으로 묻는 검색에는 영향이 적습니다.
+
+Claude Code:
+
+```bash
+claude mcp add vibecheck -- uvx vibecheck-whyd mcp
+```
+
+Claude 데스크톱 앱은 설정의 Developer에서 Edit Config로 `claude_desktop_config.json`을 열고
+`mcpServers`에 아래를 넣은 뒤 앱을 완전히 종료했다가 다시 엽니다. 앱이 `uvx`를 찾지 못해
+연결에 실패하면 `which uvx`로 나온 전체 경로를 `command`에 적습니다.
+
+```json
+{
+  "mcpServers": {
+    "vibecheck": { "command": "uvx", "args": ["vibecheck-whyd", "mcp"] }
+  }
+}
+```
+
+그다음 대화에서 레포의 절대 경로와 함께 "면접 연습하자"라고 하면 됩니다.
+
+| 도구 | 하는 일 |
+|---|---|
+| `interview_questions` | 면접 질문 세트. 답의 재료는 사용자가 답한 뒤에만 보여주게 한다 |
+| `grading_material` | 채점 기준과 근거. 검색한 코드에 README와 빌드 설정 파일을 늘 더한다 |
+| `record_grade` | 채점 결과를 기록에 남긴다 |
+| `search_code` | 레포에서 관련 코드를 찾는다 |
+| `file_relations` | 파일이 무엇을 부르고 무엇에게 불리는지 |
+| `practice_history` | 채점 기록과 근거 없이 단정한 습관 |
+
+채점 뒤에는 답에 쓸 수 있었던 레포의 재료(README의 설계 판단 등)와 그 위치, 레포 사실로
+만든 꼬리질문을 보여줍니다. 모범 답안은 같은 질문에 한 번 답해 본 뒤부터 보여줍니다.
+답을 먼저 보면 코드를 읽는 대신 문장을 외우기 때문입니다.
+
+MCP 채점은 연결한 AI가 하므로 웹 채점과 점수를 견주지 않습니다. 같은 답도 실행마다 점수가
+조금 흔들립니다. 기록 탭은 연결한 AI가 채점한 답에 표시를 답니다.
+
 ## 요구 사항
 
 - Python 3.11+
-- Anthropic API 키
+- Anthropic API 키 (Claude에 MCP로 붙여 쓸 때는 필요 없음)
 
 ## 기술 스택
 
@@ -256,9 +341,24 @@ Java 파일은 호출 대신 코드에 나온 클래스 이름으로 잇습니�
 
 환각 0건. 답할 수 없을 때는 무엇이 없어서 답할 수 없는지를 밝혔습니다.
 
-측정 과정과 원자료는 [`experiments/`](experiments/)에 있습니다.
-Java 지원을 더할 때 파이썬 결과가 바뀌지 않았는지 확인한 과정은 [`experiments/java_support.md`](experiments/java_support.md)에,
-인덱싱 중단·재개와 요약 속도를 잰 과정은 [`experiments/indexing_resume_and_speed.md`](experiments/indexing_resume_and_speed.md)에 있습니다.
+측정 과정과 원자료는 [`experiments/`](https://github.com/ahrdyrxkddhfl/vibecheck/tree/main/experiments/)에 있습니다.
+Java 지원을 더할 때 파이썬 결과가 바뀌지 않았는지 확인한 과정은 [`experiments/java_support.md`](https://github.com/ahrdyrxkddhfl/vibecheck/blob/main/experiments/java_support.md)에,
+인덱싱 중단·재개와 요약 속도를 잰 과정은 [`experiments/indexing_resume_and_speed.md`](https://github.com/ahrdyrxkddhfl/vibecheck/blob/main/experiments/indexing_resume_and_speed.md)에 있습니다.
+
+## 맨 Claude와의 비교
+
+"그냥 Claude에게 레포를 주고 면접 연습하면 되지 않나"를 확인하려고, 같은 모델(Opus 5.5)에
+같은 질문과 같은 답을 넣어 VibeCheck를 붙인 채점과 맨 Claude의 채점을 나란히 놓았습니다.
+
+- 처음에는 맨 Claude의 피드백이 더 풍부했습니다. 지어낸 이유를 똑같이 잡았고, README에 적힌
+  설계 판단까지 짚었습니다. 원인은 모델이 아니라 VibeCheck의 설계였습니다. 근거를 검색한 코드
+  8조각으로 좁히고, 답을 짧게 받도록 제한하고 있었습니다.
+- 채점 근거에 README와 빌드 설정 파일을 늘 더하고 채점 뒤 코칭을 두자, README의 설계 판단을
+  짚었고, 맨 Claude가 소스를 열지 못해 "확인 필요"로 남긴 자리를 실제 코드의 파일과 메서드로
+  채웠습니다.
+- 두 판, 레포 하나로 한 비교라 결론이 아니라 방향입니다.
+
+조건과 결과는 [`experiments/compare_plain_claude.md`](https://github.com/ahrdyrxkddhfl/vibecheck/blob/main/experiments/compare_plain_claude.md)에 있습니다.
 
 ## 알려진 한계
 
@@ -326,8 +426,9 @@ Java는 오버로딩과 인터페이스 주입이 흔해 이름만으로는 어�
 - [x] 면접 질문 세트 — 흐름·라이브러리별 질문을 세트로 넘기며 연습 (웹)
 - [ ] 라인별 코드 설명
 - [ ] BYOK 지원
-- [ ] PyPI 배포 (`vibecheck-whyd`)
-- [ ] MCP 서버와 Claude Code 플러그인
+- [x] PyPI 배포 (`vibecheck-whyd`)
+- [x] MCP 서버 (`whyd mcp`) — Claude 데스크톱·Claude Code에서 대화로 연습
+- [ ] Claude Code 플러그인
 
 ## 라이선스
 
