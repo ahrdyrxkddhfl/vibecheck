@@ -29,7 +29,7 @@ from vibecheck.models import CallSite, Chunk, Symbol
 
 def index_repo(
         root: str,
-        llm: LLMClient,
+        llm: LLMClient | None,
         verbose: bool = True,
         persist_dir: str = ".vibecheck",
         exclude_dirs: set[str] | None = None,
@@ -50,7 +50,12 @@ def index_repo(
 
     Args:
         root (str): 레포 루트 경로.
-        llm (LLMClient): 요약에 사용할 LLM 클라이언트.
+        llm (LLMClient | None): 요약에 사용할 LLM 클라이언트. None이면 새로
+            요약하지 않는다(whyd index --no-summary). API 키 없이 인덱싱하려는
+            것으로, MCP로 Claude에 붙여 쓸 때 채점과 답변은 Claude가 하므로
+            남는 LLM 호출이 이 요약뿐이다. 캐시에 남은 요약은 그대로 쓴다.
+            요약이 빠진 청크는 경로·이름·코드 원문만으로 임베딩되어 자연어
+            질문의 검색이 약해진다(store.vector.build_embedding_text).
         verbose (bool): 진행 상황 출력 여부. 인덱싱은 파일 수에 비례해
             수 분이 걸릴 수 있으므로 기본값을 True로 두어 사용자가 멈춘
             것으로 오해하지 않게 한다.
@@ -134,13 +139,17 @@ def index_repo(
             hits = manifest.apply(chunks, str(path))
             cache_hits += hits
 
-            summarize_all(chunks, llm)
+            if llm is not None:
+                summarize_all(chunks, llm)
+            # 요약하지 않았어도 적는다. update는 요약이 있는 청크만 캐시에 남기므로
+            # 빈 요약이 캐시로 굳지 않고, 나중에 키를 넣고 다시 인덱싱하면 빠진
+            # 것만 새로 요약한다.
             manifest.update(chunks, str(path))
 
             # 새로 요약한 것이 있으면 바로 저장한다. 끝에 한 번만 저장하던 때는
             # 중간에 끊으면 이미 요금을 낸 요약까지 전부 사라졌다. update는
             # pending에만 적으므로 이 저장이 인덱스 기록을 바꾸지는 않는다.
-            new = len(chunks) - hits
+            new = len(chunks) - hits if llm is not None else 0
             if new:
                 summarized += new
                 manifest.save()
@@ -214,7 +223,11 @@ def index_repo(
         if configs:
             parts += f" + 설정 {configs}개"
         print(f"[2/3] 청크 {total}개 생성 ({parts})")
-        print(f"[3/3] 요약 완료 (캐시 재사용 {cache_hits}개 / 신규 {l2 - cache_hits}개)")
+        if llm is None:
+            reused = f" · 캐시에 있던 요약 {cache_hits}개는 그대로 씀" if cache_hits else ""
+            print(f"[3/3] 요약 건너뜀 (--no-summary){reused}")
+        else:
+            print(f"[3/3] 요약 완료 (캐시 재사용 {cache_hits}개 / 신규 {l2 - cache_hits}개)")
 
         linked = sum(len(c.calls) for c in all_chunks)
         unresolved = call_stats.get("모호", 0)

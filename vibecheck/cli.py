@@ -192,6 +192,11 @@ def index(
     exclude: list[str] = typer.Option(
         None, "--exclude", "-e", help="추가로 제외할 디렉토리 이름 (여러 번 지정 가능)"
     ),
+    no_summary: bool = typer.Option(
+        False,
+        "--no-summary",
+        help="청크 요약(LLM)을 건너뛴다. API 키 없이 인덱싱되지만 자연어 질문의 검색이 약해진다.",
+    ),
 ) -> None:
     """레포를 인덱싱한다.
 
@@ -199,6 +204,8 @@ def index(
         repo (Path): 인덱싱할 레포 루트.
         exclude (list[str]): 기본 제외 목록에 더할 디렉토리 이름.
             장부에 함께 기록되므로 report와 interview에서는 다시 칠 필요가 없다.
+        no_summary (bool): 요약하지 않는다. Anthropic 클라이언트를 만들지 않아
+            키가 없어도 멈추지 않는다. MCP로 Claude에 붙여 쓰는 사람을 위한 것이다.
     """
     repo = repo.expanduser().resolve()
     if not repo.is_dir():
@@ -217,7 +224,7 @@ def index(
 
     chunks = index_repo(
         str(repo),
-        AnthropicClient(model=SUMMARY_MODEL),
+        None if no_summary else AnthropicClient(model=SUMMARY_MODEL),
         verbose=True,
         persist_dir=persist_base,
         exclude_dirs=excludes,
@@ -239,9 +246,17 @@ def index(
     typer.secho(f"\n완료: 청크 {len(chunks)}개 -> {persist_base}", fg=typer.colors.GREEN)
     # 복사해 붙여 쓰라고 내놓는 명령줄이므로 실행 가능한 형태여야 한다.
     # 경로에 공백이 있으면 셸이 두 인자로 쪼개, 안내대로 했는데 실패한다.
-    typer.echo(
-        f'이제 질문할 수 있습니다:  whyd ask {shlex.quote(str(repo))} "질문 내용"'
-    )
+    if no_summary:
+        # 요약 없이 인덱싱한 사람은 키가 없을 가능성이 크다. whyd ask는 키가 있어야
+        # 돌아서, 그대로 안내하면 시키는 대로 쳤다가 바로 키 오류를 만난다.
+        typer.echo(
+            f"키 없이 볼 수 있습니다:  whyd serve {shlex.quote(str(repo))}\n"
+            "개요·면접 질문·관계도는 바로 보이고, 질문하기와 채점은 API 키가 필요합니다."
+        )
+    else:
+        typer.echo(
+            f'이제 질문할 수 있습니다:  whyd ask {shlex.quote(str(repo))} "질문 내용"'
+        )
 
 
 @app.command()
