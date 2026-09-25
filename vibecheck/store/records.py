@@ -338,6 +338,33 @@ def answered_questions(conn: sqlite3.Connection, repo_id: int) -> set[str]:
     return {r["question_text"] for r in rows}
 
 
+def attempts_for(repo: Path, question: str) -> int:
+    """이 질문에 전에 몇 번 답했는지 센다.
+
+    MCP 코칭이 모범 답안을 보여줄지 정하는 재료다. 처음 답한 질문에 모범 답안을
+    먼저 보여주면 코드를 읽는 대신 문장을 외운다. 한 번 답해 본 뒤에 보여준다.
+    기록 파일이 없으면 만들지 않고 0을 돌려준다.
+
+    Args:
+        repo (Path): 정규화된 레포 경로.
+        question (str): 질문 문장.
+
+    Returns:
+        int: 채점 기록에 남은 답의 수.
+    """
+    if not db_path(repo).exists():
+        return 0
+    conn = connect(repo)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM answers WHERE repo_id = ? AND question_text = ?",
+            (get_repo_id(conn, repo), question),
+        ).fetchone()
+        return row["n"]
+    finally:
+        conn.close()
+
+
 def answered_in(repo: Path) -> set[str]:
     """레포에서 채점받은 적 있는 질문 문장을 꺼낸다.
 

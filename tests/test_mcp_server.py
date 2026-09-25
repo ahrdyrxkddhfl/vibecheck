@@ -223,6 +223,45 @@ def test_old_records_get_grader_column(tmp_path):
     assert grader is None
 
 
+def test_grading_includes_readme_and_build_files(repo):
+    """채점 근거에 README와 빌드 설정 파일이 늘 들어가고, 비밀이 들 수 있는 설정은 빠진다.
+
+    검색한 코드 조각만으로는 README에 적힌 설계 판단을 보지 못해, 지어낸 이유가
+    레포와 어긋나는지 짚지 못했다.
+
+    Args:
+        repo (Path): 픽스처가 만든 레포.
+    """
+    (repo / "README.md").write_text("# 앱\n\nH2 인메모리 DB를 쓴다.\n", encoding="utf-8")
+    (repo / "build.gradle").write_text("dependencies { implementation 'x' }\n", encoding="utf-8")
+    (repo / "application.yml").write_text("password: secret\n", encoding="utf-8")
+    server = mcp_server.build_server(repo)
+
+    data = call(server, "grading_material", question="q", answer="확장성 때문입니다")
+
+    assert "H2 인메모리 DB를 쓴다." in data["material"]
+    assert "implementation 'x'" in data["material"]
+    assert "secret" not in data["material"]
+    assert data["evidence"][-2:] == ["README.md:1-3 README.md", "build.gradle:1-1 build.gradle"]
+    assert data["coaching"] == load_prompt("coach_answer")
+
+
+def test_previous_attempts_counts_earlier_answers(repo):
+    """같은 질문에 전에 답한 횟수를 알려준다. 모범 답안을 보여줄지 정하는 재료다.
+
+    Args:
+        repo (Path): 픽스처가 만든 레포.
+    """
+    server = mcp_server.build_server(repo)
+
+    first = call(server, "grading_material", question="grade는 무엇을 하나요?", answer="a")
+    call(server, "record_grade", question="grade는 무엇을 하나요?", answer="a", grading_json=GRADED)
+    second = call(server, "grading_material", question="grade는 무엇을 하나요?", answer="b")
+
+    assert first["previous_attempts"] == 0
+    assert second["previous_attempts"] == 1
+
+
 def test_tools_are_listed():
     """여섯 도구가 모두 등록된다."""
     tools = asyncio.run(mcp_server.build_server(None).list_tools())
