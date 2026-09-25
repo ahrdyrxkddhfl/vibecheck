@@ -163,6 +163,7 @@ def load_history(repo: Path, limit: int = 20) -> dict:
                 "total": r["specificity"] + r["calibration"] + r["groundedness"],
                 "verdict_line": r["verdict_line"],
                 "revision": r["revision"],
+                "grader": r["grader"],
                 "claims": mine,
                 "risky_count": sum(
                     1 for c in mine

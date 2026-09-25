@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS answers (
     groundedness  INTEGER NOT NULL,
     verdict_line  TEXT,
     revision      TEXT,
+    grader        TEXT,
     created_at    TEXT NOT NULL
 );
 
@@ -128,6 +129,10 @@ def upgrade(conn: sqlite3.Connection) -> None:
     asks.parent_id: 이어지는 질문이 어느 질문에 이어졌는지. 질문 이어가기를 붙이며
     더했다. 기존 질문은 이 칸이 비어 첫 질문으로 읽힌다.
 
+    answers.grader: 누가 채점했는지. MCP로 연결한 AI가 채점하면 "mcp"이고, 비어 있으면
+    VibeCheck가 채점한 것이다. MCP 서버를 붙이며 더했다. 기존 기록은 모두 비어 있어
+    VibeCheck 채점으로 읽힌다. 실제로 그렇다.
+
     같은 파일을 두 연결이 거의 동시에 처음 열면 둘 다 칸이 없다고 보고 더하려 한다.
     뒤에 온 쪽은 "이미 있다"로 실패하는데, 원하는 상태는 이미 된 것이라 넘어간다.
 
@@ -138,6 +143,15 @@ def upgrade(conn: sqlite3.Connection) -> None:
     if "parent_id" not in columns:
         try:
             conn.execute("ALTER TABLE asks ADD COLUMN parent_id INTEGER REFERENCES asks(id)")
+            conn.commit()
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc):
+                raise
+
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(answers)")}
+    if "grader" not in columns:
+        try:
+            conn.execute("ALTER TABLE answers ADD COLUMN grader TEXT")
             conn.commit()
         except sqlite3.OperationalError as exc:
             if "duplicate column" not in str(exc):
@@ -248,6 +262,7 @@ def save_answer(
     repo_id: int,
     feedback,
     question_id: int | None = None,
+    grader: str | None = None,
 ) -> int:
     """채점 결과를 저장한다.
 
@@ -265,6 +280,8 @@ def save_answer(
         repo_id (int): 대상 레포 id.
         feedback (AnswerFeedback): 채점 결과.
         question_id (int | None): 저장된 질문의 id. 직접 입력한 질문이면 None.
+        grader (str | None): 누가 채점했는지. MCP로 연결한 AI면 "mcp", VibeCheck면 None.
+            채점한 모델이 다르면 같은 답에도 점수가 달라 서로 견줄 수 없다.
 
     Returns:
         int: 저장된 answers 행의 id.
@@ -272,8 +289,8 @@ def save_answer(
     cur = conn.execute(
         "INSERT INTO answers "
         "(repo_id, question_id, question_text, body, "
-        " specificity, calibration, groundedness, verdict_line, revision, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " specificity, calibration, groundedness, verdict_line, revision, grader, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             repo_id,
             question_id,
@@ -284,6 +301,7 @@ def save_answer(
             feedback.groundedness,
             feedback.verdict_line,
             feedback.revision,
+            grader,
             now(),
         ),
     )
@@ -318,6 +336,28 @@ def answered_questions(conn: sqlite3.Connection, repo_id: int) -> set[str]:
         "SELECT DISTINCT question_text FROM answers WHERE repo_id = ?", (repo_id,)
     ).fetchall()
     return {r["question_text"] for r in rows}
+
+
+def answered_in(repo: Path) -> set[str]:
+    """레포에서 채점받은 적 있는 질문 문장을 꺼낸다.
+
+    기록 파일이 없으면 만들지 않고 빈 집합을 돌려준다. 여는 것만으로 파일을
+    만들면 경로만 친 폴더에 .vibecheck가 생긴다(services.history와 같은 이유).
+    웹 면접 탭과 MCP 서버가 함께 쓴다.
+
+    Args:
+        repo (Path): 정규화된 레포 경로.
+
+    Returns:
+        set[str]: 질문 문장 집합.
+    """
+    if not db_path(repo).exists():
+        return set()
+    conn = connect(repo)
+    try:
+        return answered_questions(conn, get_repo_id(conn, repo))
+    finally:
+        conn.close()
 
 
 def list_answers(conn: sqlite3.Connection, repo_id: int, limit: int = 20) -> list:

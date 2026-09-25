@@ -648,6 +648,29 @@ def serve(
             timer.cancel()
 
 
+@app.command()
+def mcp(
+    repo: Path = typer.Argument(
+        None, help="기본으로 쓸 레포 경로 (선택). 주지 않으면 도구마다 경로를 받는다"
+    ),
+) -> None:
+    """Claude 같은 AI 도구에 붙는 MCP 서버를 띄운다.
+
+    직접 치는 명령이 아니라 AI 도구가 띄운다. 예를 들어 Claude Code에서는
+    claude mcp add vibecheck -- uvx vibecheck-whyd mcp 로 붙인다.
+    표준 입출력으로 통신하므로 이 명령은 화면에 아무것도 찍지 않는다.
+
+    mcp 라이브러리를 함수 안에서 import하는 이유는 serve의 uvicorn과 같다.
+    다른 명령의 시작 시간을 늘리지 않는다.
+
+    Args:
+        repo (Path): 도구에 repo가 없을 때 쓸 레포.
+    """
+    from vibecheck.mcp_server import build_server
+
+    build_server(repo.expanduser().resolve() if repo else None).run("stdio")
+
+
 def main() -> None:
     """콘솔 스크립트 진입점.
 

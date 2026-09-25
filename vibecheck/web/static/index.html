@@ -1891,7 +1891,9 @@ function renderHistory(d) {
     const box = el("details");
     const when = new Date(a.created_at).toLocaleString("ko-KR",
       { dateStyle: "short", timeStyle: "short" });
-    box.append(el("summary", null, when + "  ·  " + a.total + "/6  ·  " + a.question));
+    // 연결한 AI(MCP)가 채점한 답은 표시한다. 채점한 모델이 달라 점수를 견줄 수 없다.
+    const by = a.grader === "mcp" ? "  ·  연결한 AI 채점" : "";
+    box.append(el("summary", null, when + "  ·  " + a.total + "/6" + by + "  ·  " + a.question));
     box.append(el("div", "hbody", a.body));
 
     const score = el("div", "score");

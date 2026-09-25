@@ -32,6 +32,9 @@ dependencies = [
     "sentence-transformers",
     "fastapi",
     "uvicorn",
+    # MCP 서버(whyd mcp). 2.x에서 FastMCP가 MCPServer로 바뀌는 등 큰 버전마다
+    # 사용법이 통째로 바뀌어, 다음 큰 버전에서 조용히 깨지지 않게 위를 막는다.
+    "mcp>=2.2,<3",
 ]
 
 [project.optional-dependencies]

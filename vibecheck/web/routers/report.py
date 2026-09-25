@@ -11,8 +11,6 @@ import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -25,13 +23,7 @@ from vibecheck.services.interview import STAGE_ORDER, question_sets
 from vibecheck.services.practice import grade
 from vibecheck.services.relations import file_relations
 from vibecheck.services.report import build_report, report_path
-from vibecheck.store.records import (
-    answered_questions,
-    connect,
-    db_path,
-    get_repo_id,
-    save_answer,
-)
+from vibecheck.store.records import answered_in, connect, get_repo_id, save_answer
 from vibecheck.store.vector import VectorStore
 from vibecheck.web.deps import Index, RepoPath
 
@@ -119,27 +111,6 @@ def get_overview(repo: RepoPath, index: Index) -> dict:
 
     return data
 
-def answered_texts(repo: Path) -> set[str]:
-    """레포에서 채점받은 적 있는 질문 문장을 꺼낸다.
-
-    기록 파일이 없으면 만들지 않고 빈 집합을 돌려준다. 여는 것만으로 파일을
-    만들면 경로만 친 폴더에 .vibecheck가 생긴다(services.history와 같은 이유).
-
-    Args:
-        repo (Path): 정규화된 레포 경로.
-
-    Returns:
-        set[str]: 질문 문장 집합.
-    """
-    if not db_path(repo).exists():
-        return set()
-    conn = connect(repo)
-    try:
-        return answered_questions(conn, get_repo_id(conn, repo))
-    finally:
-        conn.close()
-
-
 @router.get("/interview")
 def get_interview(
     repo: RepoPath,
@@ -193,7 +164,7 @@ def get_interview(
             status_code=404, detail=f"세트는 1부터 {len(sets)}까지 있습니다."
         )
     questions = sets[set_no - 1]
-    answered = answered_texts(repo)
+    answered = answered_in(repo)
 
     stages = []
     number = sum(len(s) for s in sets[: set_no - 1])
