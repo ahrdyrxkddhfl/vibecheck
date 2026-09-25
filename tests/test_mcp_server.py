@@ -12,7 +12,7 @@
 import asyncio
 import json
 import sqlite3
-from pathlib import Path
+import subprocess
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
@@ -263,10 +263,106 @@ def test_previous_attempts_counts_earlier_answers(repo):
 
 
 def test_tools_are_listed():
-    """여섯 도구가 모두 등록된다."""
+    """일곱 도구가 모두 등록된다."""
     tools = asyncio.run(mcp_server.build_server(None).list_tools())
 
     assert {t.name for t in tools} == {
-        "interview_questions", "grading_material", "record_grade",
+        "prepare_repo", "interview_questions", "grading_material", "record_grade",
         "search_code", "file_relations", "practice_history",
     }
+
+
+@pytest.mark.parametrize(
+    ("url", "clone_url", "tail"),
+    [
+        ("https://github.com/Owner/repo", "https://github.com/Owner/repo", ("github.com", "Owner", "repo")),
+        ("https://github.com/Owner/repo/tree/main", "https://github.com/Owner/repo", ("github.com", "Owner", "repo")),
+        ("https://github.com/Owner/repo.git", "https://github.com/Owner/repo", ("github.com", "Owner", "repo")),
+        ("https://git.example.com/team/sub/repo", "https://git.example.com/team/sub/repo",
+         ("git.example.com", "team", "sub", "repo")),
+    ],
+)
+def test_clone_target_normalizes_urls(url, clone_url, tail):
+    """GitHub에서 복사한 /tree/main 같은 주소도 레포 주소로 고치고, 호스트/주인/이름 아래에 받는다.
+
+    Args:
+        url (str): 사용자가 준 주소.
+        clone_url (str): 내려받을 주소.
+        tail (tuple): 내려받을 폴더의 끝 조각.
+    """
+    got_url, dest = mcp_server.clone_target(url)
+
+    assert got_url == clone_url
+    assert dest == mcp_server.REPOS_DIR.joinpath(*tail)
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://github.com/a/b", "ext::sh -c touch% /tmp/x", "https://github.com/a",
+     "https://evil.com/../../etc/passwd", "https://github.com/a/b%20c"],
+)
+def test_clone_target_rejects_unsafe_urls(url):
+    """https가 아니거나, 레포로 읽을 수 없거나, 폴더를 벗어나려는 주소는 거절한다.
+
+    Args:
+        url (str): 거절해야 할 주소.
+    """
+    with pytest.raises(ToolError):
+        mcp_server.clone_target(url)
+
+
+def test_clone_failure_suggests_local_path(tmp_path, monkeypatch):
+    """내려받지 못하면 비공개 레포일 수 있다며 폴더 경로를 달라고 한다. 비밀번호를 묻지 않는다.
+
+    Args:
+        tmp_path (Path): pytest가 주는 임시 폴더. 내려받을 곳으로 쓴다.
+        monkeypatch (pytest.MonkeyPatch): git 실행과 내려받을 곳을 바꿔 끼운다.
+    """
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        """실패한 git 실행을 흉내 내고, 넘어온 환경을 기억한다."""
+        seen["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(args, 128, "", "fatal: could not read Username")
+
+    monkeypatch.setattr(mcp_server, "REPOS_DIR", tmp_path)
+    monkeypatch.setattr(mcp_server.subprocess, "run", fake_run)
+
+    with pytest.raises(ToolError, match="비공개 레포면"):
+        mcp_server.fetch_repo("https://github.com/someone/private")
+    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_prepare_repo_indexes_folder_and_remembers_it(tmp_path, monkeypatch):
+    """폴더를 주면 요약 없이 인덱싱하고, 이후 도구가 경로 없이 그 레포를 쓴다.
+
+    whyd index와 같은 index_repo가 돈다. 임베딩 모델은 내려받지 않도록 저장소만 흉내 낸다.
+
+    Args:
+        tmp_path (Path): pytest가 주는 임시 폴더. 레포로 쓴다.
+        monkeypatch (pytest.MonkeyPatch): 벡터 저장소를 바꿔 끼운다.
+    """
+    class FakeStore:
+        """임베딩 없이 add와 prune만 받는 저장소."""
+
+        def __init__(self, persist_dir):
+            """저장 위치만 받는다."""
+
+        def add(self, chunks):
+            """아무것도 하지 않는다."""
+
+        def prune(self, ids):
+            """지운 것이 없다고 답한다."""
+            return 0
+
+    monkeypatch.setattr("vibecheck.store.vector.VectorStore", FakeStore)
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    server = mcp_server.build_server(None)
+
+    data = call(server, "prepare_repo", source=str(tmp_path))
+    history = call(server, "practice_history")
+
+    assert data["repo"] == str(tmp_path.resolve())
+    assert data["chunks"] >= 2
+    assert data["summarized"] == 0
+    assert history["answer_count"] == 0
